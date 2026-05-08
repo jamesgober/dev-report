@@ -1,0 +1,49 @@
+[package]
+name = "dev-report"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+readme = "README.md"
+license = "Apache-2.0"
+
+authors = [
+    "James Gober <me@jamesgober.com>"
+]
+
+description = "Structured, machine-readable reports for AI-assisted Rust development. Foundation schema of the dev-* verification suite."
+
+keywords = [
+    "testing",
+    "verification",
+    "reporting",
+    "ci",
+    "ai-tools"
+]
+
+categories = [
+    "development-tools",
+    "development-tools::testing",
+    "development-tools::debugging"
+]
+
+documentation = "https://docs.rs/dev-report"
+repository = "https://github.com/jamesgober/dev-report"
+homepage = "https://github.com/jamesgober/dev-report"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+chrono = { version = "0.4", default-features = false, features = ["serde", "clock"] }
+
+[features]
+default = []
+markdown = []
+terminal = []
+
+[profile.release]
+opt-level = 3
+lto = "thin"
