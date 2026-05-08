@@ -1,0 +1,262 @@
+//! Aggregation of multiple [`Report`]s into a [`MultiReport`].
+//!
+//! A CI run typically invokes several producers (`dev-bench`,
+//! `dev-fixtures`, `dev-async`, ...) and wants to publish a single
+//! aggregate document. `MultiReport` carries those reports without
+//! merging checks across producers; check identity is
+//! `(producer, name)`.
+
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+
+use crate::{CheckResult, Report, Verdict};
+
+/// Aggregate of multiple [`Report`]s emitted in a single run.
+///
+/// Identity of a check is `(producer, name)`. Two checks with the same
+/// `name` from different producers are kept separate.
+///
+/// # Example
+///
+/// ```
+/// use dev_report::{CheckResult, MultiReport, Report, Severity, Verdict};
+///
+/// let mut bench = Report::new("crate", "0.1.0").with_producer("dev-bench");
+/// bench.push(CheckResult::pass("hot_path"));
+///
+/// let mut chaos = Report::new("crate", "0.1.0").with_producer("dev-chaos");
+/// chaos.push(CheckResult::fail("recover", Severity::Error));
+///
+/// let mut multi = MultiReport::new("crate", "0.1.0");
+/// multi.push(bench);
+/// multi.push(chaos);
+/// multi.finish();
+///
+/// assert_eq!(multi.overall_verdict(), Verdict::Fail);
+/// assert_eq!(multi.total_check_count(), 2);
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MultiReport {
+    /// Schema version. Tracks the same number as [`Report::schema_version`].
+    pub schema_version: u32,
+    /// Crate or project being reported on.
+    pub subject: String,
+    /// Version of the subject.
+    pub subject_version: String,
+    /// When aggregation started.
+    pub started_at: DateTime<Utc>,
+    /// When aggregation finished, if known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_at: Option<DateTime<Utc>>,
+    /// Constituent reports.
+    pub reports: Vec<Report>,
+}
+
+impl MultiReport {
+    /// Begin a new aggregate for the given subject and version.
+    pub fn new(subject: impl Into<String>, subject_version: impl Into<String>) -> Self {
+        Self {
+            schema_version: 1,
+            subject: subject.into(),
+            subject_version: subject_version.into(),
+            started_at: Utc::now(),
+            finished_at: None,
+            reports: Vec::new(),
+        }
+    }
+
+    /// Append a constituent report.
+    pub fn push(&mut self, r: Report) {
+        self.reports.push(r);
+    }
+
+    /// Mark aggregation finished, stamping the finish time.
+    pub fn finish(&mut self) {
+        self.finished_at = Some(Utc::now());
+    }
+
+    /// Compute the overall verdict across every check in every report.
+    ///
+    /// Follows the same precedence as [`Report::overall_verdict`]:
+    /// `Fail > Warn > Pass > Skip`.
+    pub fn overall_verdict(&self) -> Verdict {
+        let mut saw_fail = false;
+        let mut saw_warn = false;
+        let mut saw_pass = false;
+        for r in &self.reports {
+            for c in &r.checks {
+                match c.verdict {
+                    Verdict::Fail => saw_fail = true,
+                    Verdict::Warn => saw_warn = true,
+                    Verdict::Pass => saw_pass = true,
+                    Verdict::Skip => {}
+                }
+            }
+        }
+        if saw_fail {
+            Verdict::Fail
+        } else if saw_warn {
+            Verdict::Warn
+        } else if saw_pass {
+            Verdict::Pass
+        } else {
+            Verdict::Skip
+        }
+    }
+
+    /// Total number of checks across all constituent reports.
+    pub fn total_check_count(&self) -> usize {
+        self.reports.iter().map(|r| r.checks.len()).sum()
+    }
+
+    /// Iterate over every check across every constituent report,
+    /// paired with the producer that emitted it.
+    ///
+    /// Producers without a `producer` field are emitted as `None`.
+    pub fn iter_checks(&self) -> impl Iterator<Item = (Option<&str>, &CheckResult)> {
+        self.reports.iter().flat_map(|r| {
+            let p = r.producer.as_deref();
+            r.checks.iter().map(move |c| (p, c))
+        })
+    }
+
+    /// Iterate over checks carrying the given tag, paired with their producer.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use dev_report::{CheckResult, MultiReport, Report};
+    ///
+    /// let mut bench = Report::new("c", "0.1.0").with_producer("dev-bench");
+    /// bench.push(CheckResult::pass("hot").with_tag("slow"));
+    /// bench.push(CheckResult::pass("cold"));
+    ///
+    /// let mut multi = MultiReport::new("c", "0.1.0");
+    /// multi.push(bench);
+    ///
+    /// let slow: Vec<_> = multi.checks_with_tag("slow").collect();
+    /// assert_eq!(slow.len(), 1);
+    /// assert_eq!(slow[0].0, Some("dev-bench"));
+    /// ```
+    pub fn checks_with_tag<'a>(
+        &'a self,
+        tag: &'a str,
+    ) -> impl Iterator<Item = (Option<&'a str>, &'a CheckResult)> {
+        self.iter_checks().filter(move |(_, c)| c.has_tag(tag))
+    }
+
+    /// Serialize this multi-report to JSON.
+    pub fn to_json(&self) -> serde_json::Result<String> {
+        serde_json::to_string_pretty(self)
+    }
+
+    /// Deserialize a multi-report from JSON.
+    pub fn from_json(s: &str) -> serde_json::Result<Self> {
+        serde_json::from_str(s)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Severity;
+
+    fn rep(producer: &str, checks: Vec<CheckResult>) -> Report {
+        let mut r = Report::new("c", "0.1.0").with_producer(producer);
+        for c in checks {
+            r.push(c);
+        }
+        r.finish();
+        r
+    }
+
+    #[test]
+    fn empty_multi_is_skip() {
+        let m = MultiReport::new("c", "0.1.0");
+        assert_eq!(m.overall_verdict(), Verdict::Skip);
+        assert_eq!(m.total_check_count(), 0);
+    }
+
+    #[test]
+    fn fail_in_any_report_dominates() {
+        let mut m = MultiReport::new("c", "0.1.0");
+        m.push(rep("a", vec![CheckResult::pass("x")]));
+        m.push(rep("b", vec![CheckResult::fail("y", Severity::Error)]));
+        m.push(rep("c", vec![CheckResult::warn("z", Severity::Warning)]));
+        assert_eq!(m.overall_verdict(), Verdict::Fail);
+    }
+
+    #[test]
+    fn warn_dominates_pass_and_skip() {
+        let mut m = MultiReport::new("c", "0.1.0");
+        m.push(rep("a", vec![CheckResult::pass("x")]));
+        m.push(rep("b", vec![CheckResult::skip("y")]));
+        m.push(rep("c", vec![CheckResult::warn("z", Severity::Warning)]));
+        assert_eq!(m.overall_verdict(), Verdict::Warn);
+    }
+
+    #[test]
+    fn pass_dominates_skip() {
+        let mut m = MultiReport::new("c", "0.1.0");
+        m.push(rep("a", vec![CheckResult::skip("x")]));
+        m.push(rep("b", vec![CheckResult::pass("y")]));
+        assert_eq!(m.overall_verdict(), Verdict::Pass);
+    }
+
+    #[test]
+    fn same_name_across_producers_is_kept_separate() {
+        // Both producers emit a check named "compile". MultiReport must
+        // NOT collapse them into one entry.
+        let mut m = MultiReport::new("c", "0.1.0");
+        m.push(rep("p1", vec![CheckResult::pass("compile")]));
+        m.push(rep(
+            "p2",
+            vec![CheckResult::fail("compile", Severity::Error)],
+        ));
+        assert_eq!(m.total_check_count(), 2);
+        assert_eq!(m.overall_verdict(), Verdict::Fail);
+
+        let producers: Vec<_> = m
+            .iter_checks()
+            .filter(|(_, c)| c.name == "compile")
+            .map(|(p, _)| p)
+            .collect();
+        assert_eq!(producers, vec![Some("p1"), Some("p2")]);
+    }
+
+    #[test]
+    fn iter_checks_pairs_with_producer() {
+        let mut m = MultiReport::new("c", "0.1.0");
+        m.push(rep(
+            "p1",
+            vec![CheckResult::pass("a"), CheckResult::pass("b")],
+        ));
+        m.push(rep("p2", vec![CheckResult::pass("c")]));
+        let v: Vec<_> = m.iter_checks().map(|(p, c)| (p, c.name.clone())).collect();
+        assert_eq!(
+            v,
+            vec![
+                (Some("p1"), "a".to_string()),
+                (Some("p1"), "b".to_string()),
+                (Some("p2"), "c".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn json_round_trip() {
+        let mut m = MultiReport::new("c", "0.1.0");
+        m.push(rep(
+            "p1",
+            vec![CheckResult::fail("x", Severity::Error)
+                .with_tag("regression")
+                .with_detail("regressed")],
+        ));
+        m.finish();
+        let json = m.to_json().unwrap();
+        let parsed = MultiReport::from_json(&json).unwrap();
+        assert_eq!(parsed.subject, "c");
+        assert_eq!(parsed.reports.len(), 1);
+        assert_eq!(parsed.overall_verdict(), Verdict::Fail);
+    }
+}

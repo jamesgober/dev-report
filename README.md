@@ -6,8 +6,9 @@
 
 <p align="center">
     <a href="https://crates.io/crates/dev-report"><img alt="crates.io" src="https://img.shields.io/crates/v/dev-report.svg"></a>
+    <a href="https://crates.io/crates/dev-report"><img alt="downloads" src="https://img.shields.io/crates/d/dev-report.svg"></a>
+    <a href="https://github.com/jamesgober/dev-report/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/jamesgober/dev-report/actions/workflows/ci.yml/badge.svg"></a>
     <a href="https://docs.rs/dev-report"><img alt="docs.rs" src="https://docs.rs/dev-report/badge.svg"></a>
-    <a href="https://github.com/jamesgober/dev-report/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-blue.svg"></a>
 </p>
 
 <p align="center">
@@ -39,7 +40,14 @@ Add to `Cargo.toml`:
 
 ```toml
 [dependencies]
-dev-report = "0.1"
+dev-report = "0.9"
+```
+
+Opt-in features:
+
+```toml
+[dependencies]
+dev-report = { version = "0.9", features = ["terminal", "markdown"] }
 ```
 
 Build a report:
@@ -62,6 +70,113 @@ report.finish();
 let verdict = report.overall_verdict();   // Verdict::Fail
 let json = report.to_json().unwrap();     // ready to write to disk or stdout
 ```
+
+## Tags and evidence
+
+Tags filter checks by category. Evidence attaches typed, decision-grade
+data without forcing the consumer to parse the free-form `detail` string.
+
+```rust
+use dev_report::{CheckResult, Evidence, Report};
+
+let mut report = Report::new("my-crate", "0.2.0");
+
+report.push(
+    CheckResult::pass("bench::parse")
+        .with_tag("bench")
+        .with_duration_ms(7)
+        .with_evidence(Evidence::numeric("mean_ns", 1234.5))
+        .with_evidence(Evidence::numeric("baseline_ns", 1100.0))
+        .with_evidence(Evidence::kv(
+            "env",
+            [("CI", "true"), ("RUST_LOG", "debug")],
+        ))
+        .with_evidence(Evidence::file_ref_lines("site", "src/parse.rs", 10, 20)),
+);
+
+// Filter by tag without parsing names.
+let bench_checks: Vec<_> = report.checks_with_tag("bench").collect();
+assert_eq!(bench_checks.len(), 1);
+```
+
+The four evidence kinds are:
+
+| Kind       | Constructor                              | Use for                                    |
+|------------|-------------------------------------------|---------------------------------------------|
+| `Numeric`  | `Evidence::numeric(label, value)`         | A single labeled number (mean_ns, ops/sec). |
+| `KeyValue` | `Evidence::kv(label, pairs)`              | String->string maps (env, config).          |
+| `Snippet`  | `Evidence::snippet(label, text)`          | Short captured text (panic, log line).      |
+| `FileRef`  | `Evidence::file_ref(label, path)` / `file_ref_lines(label, path, start, end)` | Pointer to a source location. |
+
+Both `tags` and `evidence` are additive: v0.1.0 reports deserialize as
+v0.9.0 reports with empty collections, and reports with no tags or
+evidence omit those keys from the JSON output.
+
+## Diffing two reports
+
+Compare a current run against a baseline to flag regressions:
+
+```rust
+use dev_report::{CheckResult, DiffOptions, Report, Severity};
+
+let mut baseline = Report::new("crate", "0.1.0");
+baseline.push(CheckResult::pass("hot_path").with_duration_ms(100));
+
+let mut current = Report::new("crate", "0.1.0");
+current.push(CheckResult::fail("hot_path", Severity::Error).with_duration_ms(200));
+current.push(CheckResult::pass("new_check"));
+
+let diff = current.diff_with(
+    &baseline,
+    &DiffOptions {
+        duration_regression_pct: Some(20.0),
+        duration_regression_abs_ms: None,
+    },
+);
+
+assert_eq!(diff.newly_failing, vec!["hot_path".to_string()]);
+assert_eq!(diff.added, vec!["new_check".to_string()]);
+assert!(!diff.is_clean());
+```
+
+`Diff` exposes `newly_failing`, `newly_passing`, `severity_changes`,
+`duration_regressions`, `added`, `removed`. All vectors are sorted by
+check name so two diffs of the same input pair are byte-equal.
+
+## Aggregating multiple producers
+
+A single CI run usually invokes several producers (`dev-bench`,
+`dev-fixtures`, `dev-async`, ...). `MultiReport` aggregates them while
+preserving each check's `(producer, name)` identity:
+
+```rust
+use dev_report::{CheckResult, MultiReport, Report, Severity};
+
+let mut bench = Report::new("crate", "0.1.0").with_producer("dev-bench");
+bench.push(CheckResult::pass("hot_path"));
+
+let mut chaos = Report::new("crate", "0.1.0").with_producer("dev-chaos");
+chaos.push(CheckResult::fail("recover", Severity::Critical));
+
+let mut multi = MultiReport::new("crate", "0.1.0");
+multi.push(bench);
+multi.push(chaos);
+multi.finish();
+
+let json = multi.to_json().unwrap();
+```
+
+## Output formats
+
+Two opt-in features render a `Report` for human consumption. Both are
+pure functions; JSON remains the only round-trippable wire format.
+
+- `terminal` — `Report::to_terminal` (monochrome) and
+  `Report::to_terminal_color` (ANSI). 80-column friendly. No new
+  dependencies.
+- `markdown` — `Report::to_markdown` emits a CommonMark-compatible
+  document preserving every fact (verdict, severity, tags, evidence,
+  durations). No new dependencies.
 
 ## Verdict rules
 
@@ -88,8 +203,15 @@ schema:
 
 ## Status
 
-Pre-release. The schema MAY change between `0.x` versions. The `1.0`
-release will pin the schema and follow strict semver.
+`v0.9.x` is the pre-1.0 stabilization line. The schema is at
+`schema_version = 1` and stays there through this line. Minor
+additions remain possible before `1.0`; the `1.0` release will pin
+the schema and follow strict semver.
+
+## Minimum supported Rust version
+
+`1.75` — pinned in `Cargo.toml` via `rust-version` and verified by
+the MSRV job in CI.
 
 ## License
 
