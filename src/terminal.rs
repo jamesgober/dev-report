@@ -1,12 +1,15 @@
 //! Terminal pretty-printer. Available with the `terminal` feature.
 //!
-//! Pure function over a [`Report`]. No I/O, no global state, no extra
-//! dependencies. ANSI color is opt-in so the caller decides based on
-//! their own TTY detection.
+//! Pure function over a [`Report`], [`Diff`], or [`MultiReport`]. No I/O,
+//! no global state, no extra dependencies. ANSI color is opt-in so the
+//! caller decides based on their own TTY detection.
+//!
+//! [`Diff`]: crate::Diff
+//! [`MultiReport`]: crate::MultiReport
 
 use std::fmt::Write as _;
 
-use crate::{CheckResult, EvidenceData, FileRef, Report, Severity, Verdict};
+use crate::{CheckResult, Diff, EvidenceData, FileRef, MultiReport, Report, Severity, Verdict};
 
 /// Render a report to a TTY-friendly string. Monochrome.
 ///
@@ -44,6 +47,57 @@ pub fn to_terminal(report: &Report) -> String {
 /// ```
 pub fn to_terminal_color(report: &Report) -> String {
     render(report, true)
+}
+
+/// Render a [`Diff`] to a TTY-friendly string. Monochrome.
+///
+/// # Example
+///
+/// ```
+/// use dev_report::{terminal, CheckResult, Report, Severity};
+///
+/// let mut prev = Report::new("c", "0.1.0");
+/// prev.push(CheckResult::pass("a"));
+/// let mut curr = Report::new("c", "0.1.0");
+/// curr.push(CheckResult::fail("a", Severity::Error));
+///
+/// let diff = curr.diff(&prev);
+/// let out = terminal::diff_to_terminal(&diff);
+/// assert!(out.contains("Newly failing"));
+/// ```
+pub fn diff_to_terminal(diff: &Diff) -> String {
+    render_diff(diff, false)
+}
+
+/// Render a [`Diff`] with ANSI color codes for TTY output.
+pub fn diff_to_terminal_color(diff: &Diff) -> String {
+    render_diff(diff, true)
+}
+
+/// Render a [`MultiReport`] to a TTY-friendly string. Monochrome.
+///
+/// # Example
+///
+/// ```
+/// use dev_report::{terminal, CheckResult, MultiReport, Report};
+///
+/// let mut bench = Report::new("c", "0.1.0").with_producer("dev-bench");
+/// bench.push(CheckResult::pass("hot"));
+///
+/// let mut multi = MultiReport::new("c", "0.1.0");
+/// multi.push(bench);
+/// multi.finish();
+///
+/// let out = terminal::multi_to_terminal(&multi);
+/// assert!(out.contains("dev-bench"));
+/// ```
+pub fn multi_to_terminal(multi: &MultiReport) -> String {
+    render_multi(multi, false)
+}
+
+/// Render a [`MultiReport`] with ANSI color codes for TTY output.
+pub fn multi_to_terminal_color(multi: &MultiReport) -> String {
+    render_multi(multi, true)
 }
 
 fn render(report: &Report, color: bool) -> String {
@@ -212,6 +266,106 @@ fn check_badge(c: &CheckResult, color: bool) -> String {
     format!("[{}{}{}{}]", open, label, sev, close)
 }
 
+fn render_diff(diff: &Diff, color: bool) -> String {
+    let bold = if color { "\x1b[1m" } else { "" };
+    let red = if color { "\x1b[31m" } else { "" };
+    let green = if color { "\x1b[32m" } else { "" };
+    let yellow = if color { "\x1b[33m" } else { "" };
+    let dim = if color { "\x1b[2m" } else { "" };
+    let reset = if color { "\x1b[0m" } else { "" };
+
+    let mut out = String::with_capacity(256);
+    let _ = writeln!(out, "{}=== Diff ==={}", bold, reset);
+    if diff.is_clean() {
+        let _ = writeln!(out, "{}clean (no differences){}", green, reset);
+        return out;
+    }
+    write_diff_section(&mut out, "Newly failing", red, reset, &diff.newly_failing);
+    write_diff_section(&mut out, "Newly passing", green, reset, &diff.newly_passing);
+    write_diff_section(&mut out, "Added", dim, reset, &diff.added);
+    write_diff_section(&mut out, "Removed", dim, reset, &diff.removed);
+    if !diff.severity_changes.is_empty() {
+        let _ = writeln!(out, "{}Severity changes{}:", yellow, reset);
+        for c in &diff.severity_changes {
+            let from = c.from.map(severity_word).unwrap_or("none");
+            let to = c.to.map(severity_word).unwrap_or("none");
+            let _ = writeln!(out, "  - {} : {} -> {}", c.name, from, to);
+        }
+    }
+    if !diff.duration_regressions.is_empty() {
+        let _ = writeln!(out, "{}Duration regressions{}:", yellow, reset);
+        for r in &diff.duration_regressions {
+            let _ = writeln!(
+                out,
+                "  - {} : {}ms -> {}ms ({:+.2}%)",
+                r.name, r.baseline_ms, r.current_ms, r.delta_pct
+            );
+        }
+    }
+    out
+}
+
+fn write_diff_section(
+    out: &mut String,
+    label: &str,
+    color_open: &str,
+    color_close: &str,
+    items: &[String],
+) {
+    if items.is_empty() {
+        return;
+    }
+    let _ = writeln!(out, "{}{}{}:", color_open, label, color_close);
+    for name in items {
+        let _ = writeln!(out, "  - {}", name);
+    }
+}
+
+fn severity_word(s: Severity) -> &'static str {
+    match s {
+        Severity::Info => "info",
+        Severity::Warning => "warning",
+        Severity::Error => "error",
+        Severity::Critical => "critical",
+    }
+}
+
+fn render_multi(multi: &MultiReport, color: bool) -> String {
+    let bold = if color { "\x1b[1m" } else { "" };
+    let dim = if color { "\x1b[2m" } else { "" };
+    let reset = if color { "\x1b[0m" } else { "" };
+
+    let mut out = String::with_capacity(512);
+    let _ = writeln!(
+        out,
+        "{}=== MultiReport :: {} {} ==={}",
+        bold, multi.subject, multi.subject_version, reset
+    );
+    let _ = writeln!(
+        out,
+        "{}{} reports, {} total checks{}",
+        dim,
+        multi.reports.len(),
+        multi.total_check_count(),
+        reset
+    );
+    let overall = verdict_label(multi.overall_verdict(), color);
+    let _ = writeln!(out, "verdict:  {}", overall);
+    out.push('\n');
+    for r in &multi.reports {
+        let _ = writeln!(
+            out,
+            "{}--- {} ---{}",
+            bold,
+            r.producer.as_deref().unwrap_or("(unknown producer)"),
+            reset
+        );
+        out.push_str(&render(r, color));
+        out.push('\n');
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -342,5 +496,56 @@ mod tests {
         assert!(kinds.contains(&EvidenceKind::Numeric));
         assert!(kinds.contains(&EvidenceKind::KeyValue));
         assert!(kinds.contains(&EvidenceKind::FileRef));
+    }
+
+    #[test]
+    fn diff_render_clean() {
+        let mut a = Report::new("c", "0.1.0");
+        a.push(CheckResult::pass("x"));
+        let b = a.clone();
+        let d = a.diff(&b);
+        let out = diff_to_terminal(&d);
+        assert!(out.contains("clean"));
+    }
+
+    #[test]
+    fn diff_render_with_failures() {
+        let mut prev = Report::new("c", "0.1.0");
+        prev.push(CheckResult::pass("a"));
+        let mut curr = Report::new("c", "0.1.0");
+        curr.push(CheckResult::fail("a", Severity::Error));
+        let d = curr.diff(&prev);
+        let out = diff_to_terminal(&d);
+        assert!(out.contains("Newly failing"));
+        assert!(out.contains("- a"));
+    }
+
+    #[test]
+    fn diff_color_render_has_ansi() {
+        let mut prev = Report::new("c", "0.1.0");
+        prev.push(CheckResult::pass("a"));
+        let mut curr = Report::new("c", "0.1.0");
+        curr.push(CheckResult::fail("a", Severity::Error));
+        let d = curr.diff(&prev);
+        let out = diff_to_terminal_color(&d);
+        assert!(out.contains('\x1b'));
+    }
+
+    #[test]
+    fn multi_render_includes_each_producer() {
+        let mut bench = Report::new("c", "0.1.0").with_producer("dev-bench");
+        bench.push(CheckResult::pass("hot"));
+        let mut chaos = Report::new("c", "0.1.0").with_producer("dev-chaos");
+        chaos.push(CheckResult::fail("recover", Severity::Critical));
+
+        let mut multi = MultiReport::new("c", "0.1.0");
+        multi.push(bench);
+        multi.push(chaos);
+
+        let out = multi_to_terminal(&multi);
+        assert!(out.contains("dev-bench"));
+        assert!(out.contains("dev-chaos"));
+        assert!(out.contains("hot"));
+        assert!(out.contains("recover"));
     }
 }

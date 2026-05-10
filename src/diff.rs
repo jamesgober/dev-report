@@ -130,6 +130,33 @@ impl Diff {
             && self.added.is_empty()
             && self.removed.is_empty()
     }
+
+    /// Render this diff as a TTY-friendly string. Monochrome.
+    ///
+    /// Available with the `terminal` feature.
+    #[cfg(feature = "terminal")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "terminal")))]
+    pub fn to_terminal(&self) -> String {
+        crate::terminal::diff_to_terminal(self)
+    }
+
+    /// Render this diff with ANSI color codes.
+    ///
+    /// Available with the `terminal` feature.
+    #[cfg(feature = "terminal")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "terminal")))]
+    pub fn to_terminal_color(&self) -> String {
+        crate::terminal::diff_to_terminal_color(self)
+    }
+
+    /// Render this diff to a Markdown string.
+    ///
+    /// Available with the `markdown` feature.
+    #[cfg(feature = "markdown")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "markdown")))]
+    pub fn to_markdown(&self) -> String {
+        crate::markdown::diff_to_markdown(self)
+    }
 }
 
 pub(crate) fn diff_reports(current: &Report, baseline: &Report, opts: &DiffOptions) -> Diff {

@@ -40,14 +40,14 @@ Add to `Cargo.toml`:
 
 ```toml
 [dependencies]
-dev-report = "0.9"
+dev-report = "0.9.1"
 ```
 
 Opt-in features:
 
 ```toml
 [dependencies]
-dev-report = { version = "0.9", features = ["terminal", "markdown"] }
+dev-report = { version = "0.9.1", features = ["terminal", "markdown"] }
 ```
 
 Build a report:
@@ -109,7 +109,7 @@ The four evidence kinds are:
 | `FileRef`  | `Evidence::file_ref(label, path)` / `file_ref_lines(label, path, start, end)` | Pointer to a source location. |
 
 Both `tags` and `evidence` are additive: v0.1.0 reports deserialize as
-v0.9.0 reports with empty collections, and reports with no tags or
+v0.9.x reports with empty collections, and reports with no tags or
 evidence omit those keys from the JSON output.
 
 ## Diffing two reports

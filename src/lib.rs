@@ -223,6 +223,28 @@ impl Evidence {
         }
     }
 
+    /// Build a numeric-evidence attachment from an integer value.
+    ///
+    /// Preserves precision for counters that exceed `f64`'s 53-bit
+    /// integer range (e.g. iteration counts, byte sizes). The value is
+    /// stored as `f64` on the wire (the schema is unchanged), but
+    /// callers don't have to perform a possibly-lossy `as f64` cast.
+    ///
+    /// For values up to `2^53` the round-trip is exact. Above that,
+    /// precision degrades the same way it would for any `f64`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use dev_report::Evidence;
+    ///
+    /// let e = Evidence::numeric_int("iterations", 1_000_000_i64);
+    /// assert_eq!(e.label, "iterations");
+    /// ```
+    pub fn numeric_int(label: impl Into<String>, value: i64) -> Self {
+        Self::numeric(label, value as f64)
+    }
+
     /// Build a key-value-evidence attachment from any iterable of pairs.
     ///
     /// # Example
@@ -734,6 +756,71 @@ impl Report {
         }
     }
 
+    /// `true` when [`overall_verdict`](Self::overall_verdict) is `Pass`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use dev_report::{CheckResult, Report};
+    ///
+    /// let mut r = Report::new("c", "0.1.0");
+    /// r.push(CheckResult::pass("ok"));
+    /// assert!(r.passed());
+    /// ```
+    pub fn passed(&self) -> bool {
+        self.overall_verdict() == Verdict::Pass
+    }
+
+    /// `true` when [`overall_verdict`](Self::overall_verdict) is `Fail`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use dev_report::{CheckResult, Report, Severity};
+    ///
+    /// let mut r = Report::new("c", "0.1.0");
+    /// r.push(CheckResult::fail("oops", Severity::Error));
+    /// assert!(r.failed());
+    /// ```
+    pub fn failed(&self) -> bool {
+        self.overall_verdict() == Verdict::Fail
+    }
+
+    /// `true` when [`overall_verdict`](Self::overall_verdict) is `Warn`.
+    pub fn warned(&self) -> bool {
+        self.overall_verdict() == Verdict::Warn
+    }
+
+    /// `true` when [`overall_verdict`](Self::overall_verdict) is `Skip`
+    /// (all checks were skipped, or there were no checks).
+    pub fn skipped(&self) -> bool {
+        self.overall_verdict() == Verdict::Skip
+    }
+
+    /// Iterate over checks whose [`severity`](CheckResult::severity)
+    /// matches the given level.
+    ///
+    /// `Pass` and `Skip` checks have `severity = None` and never match.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use dev_report::{CheckResult, Report, Severity};
+    ///
+    /// let mut r = Report::new("c", "0.1.0");
+    /// r.push(CheckResult::fail("a", Severity::Error));
+    /// r.push(CheckResult::warn("b", Severity::Warning));
+    /// r.push(CheckResult::fail("c", Severity::Error));
+    ///
+    /// let errors: Vec<_> = r.checks_with_severity(Severity::Error).collect();
+    /// assert_eq!(errors.len(), 2);
+    /// ```
+    pub fn checks_with_severity(&self, severity: Severity) -> impl Iterator<Item = &CheckResult> {
+        self.checks
+            .iter()
+            .filter(move |c| c.severity == Some(severity))
+    }
+
     /// Iterate over checks that carry the given tag.
     ///
     /// # Example
@@ -1024,6 +1111,51 @@ mod tests {
         let json = r.to_json().unwrap();
         assert!(!json.contains("\"tags\""));
         assert!(!json.contains("\"evidence\""));
+    }
+
+    #[test]
+    fn evidence_numeric_int_preserves_value() {
+        let e = Evidence::numeric_int("count", 1_000_000_i64);
+        if let EvidenceData::Numeric(n) = e.data {
+            assert_eq!(n as i64, 1_000_000_i64);
+        } else {
+            panic!("expected Numeric");
+        }
+    }
+
+    #[test]
+    fn report_passed_failed_warned_skipped_shortcuts() {
+        let mut p = Report::new("c", "0.1.0");
+        p.push(CheckResult::pass("ok"));
+        assert!(p.passed() && !p.failed() && !p.warned() && !p.skipped());
+
+        let mut f = Report::new("c", "0.1.0");
+        f.push(CheckResult::fail("oops", Severity::Error));
+        assert!(f.failed() && !f.passed());
+
+        let mut w = Report::new("c", "0.1.0");
+        w.push(CheckResult::warn("flaky", Severity::Warning));
+        assert!(w.warned() && !w.passed() && !w.failed());
+
+        let s = Report::new("c", "0.1.0");
+        assert!(s.skipped() && !s.passed());
+    }
+
+    #[test]
+    fn checks_with_severity_filters_by_severity() {
+        let mut r = Report::new("c", "0.1.0");
+        r.push(CheckResult::fail("a", Severity::Error));
+        r.push(CheckResult::warn("b", Severity::Warning));
+        r.push(CheckResult::fail("c", Severity::Error));
+        r.push(CheckResult::pass("d"));
+
+        let errs: Vec<_> = r.checks_with_severity(Severity::Error).collect();
+        assert_eq!(errs.len(), 2);
+        assert_eq!(errs[0].name, "a");
+        assert_eq!(errs[1].name, "c");
+
+        let warns: Vec<_> = r.checks_with_severity(Severity::Warning).collect();
+        assert_eq!(warns.len(), 1);
     }
 
     // ------------------------------------------------------------

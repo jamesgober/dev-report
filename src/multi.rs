@@ -154,6 +154,77 @@ impl MultiReport {
     pub fn from_json(s: &str) -> serde_json::Result<Self> {
         serde_json::from_str(s)
     }
+
+    /// `true` when [`overall_verdict`](Self::overall_verdict) is `Pass`.
+    pub fn passed(&self) -> bool {
+        self.overall_verdict() == Verdict::Pass
+    }
+
+    /// `true` when [`overall_verdict`](Self::overall_verdict) is `Fail`.
+    pub fn failed(&self) -> bool {
+        self.overall_verdict() == Verdict::Fail
+    }
+
+    /// `true` when [`overall_verdict`](Self::overall_verdict) is `Warn`.
+    pub fn warned(&self) -> bool {
+        self.overall_verdict() == Verdict::Warn
+    }
+
+    /// `true` when [`overall_verdict`](Self::overall_verdict) is `Skip`.
+    pub fn skipped(&self) -> bool {
+        self.overall_verdict() == Verdict::Skip
+    }
+
+    /// Iterate over checks with the given severity, paired with their producer.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use dev_report::{CheckResult, MultiReport, Report, Severity};
+    ///
+    /// let mut bench = Report::new("c", "0.1.0").with_producer("dev-bench");
+    /// bench.push(CheckResult::fail("a", Severity::Error));
+    ///
+    /// let mut multi = MultiReport::new("c", "0.1.0");
+    /// multi.push(bench);
+    ///
+    /// let errors: Vec<_> = multi.checks_with_severity(Severity::Error).collect();
+    /// assert_eq!(errors.len(), 1);
+    /// ```
+    pub fn checks_with_severity(
+        &self,
+        severity: crate::Severity,
+    ) -> impl Iterator<Item = (Option<&str>, &CheckResult)> {
+        self.iter_checks()
+            .filter(move |(_, c)| c.severity == Some(severity))
+    }
+
+    /// Render this multi-report to a TTY-friendly string. Monochrome.
+    ///
+    /// Available with the `terminal` feature.
+    #[cfg(feature = "terminal")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "terminal")))]
+    pub fn to_terminal(&self) -> String {
+        crate::terminal::multi_to_terminal(self)
+    }
+
+    /// Render this multi-report with ANSI color codes.
+    ///
+    /// Available with the `terminal` feature.
+    #[cfg(feature = "terminal")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "terminal")))]
+    pub fn to_terminal_color(&self) -> String {
+        crate::terminal::multi_to_terminal_color(self)
+    }
+
+    /// Render this multi-report to a Markdown string.
+    ///
+    /// Available with the `markdown` feature.
+    #[cfg(feature = "markdown")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "markdown")))]
+    pub fn to_markdown(&self) -> String {
+        crate::markdown::multi_to_markdown(self)
+    }
 }
 
 #[cfg(test)]

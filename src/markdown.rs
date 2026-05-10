@@ -1,12 +1,16 @@
 //! Markdown exporter. Available with the `markdown` feature.
 //!
-//! Pure function over a [`Report`] producing a CommonMark-compatible
-//! string. Every fact in the report (verdict, severity, tags, evidence,
-//! durations) is preserved in the output. No external dependencies.
+//! Pure function over a [`Report`], [`Diff`], or [`MultiReport`]
+//! producing a CommonMark-compatible string. Every fact (verdict,
+//! severity, tags, evidence, durations) is preserved in the output.
+//! No external dependencies.
+//!
+//! [`Diff`]: crate::Diff
+//! [`MultiReport`]: crate::MultiReport
 
 use std::fmt::Write as _;
 
-use crate::{CheckResult, EvidenceData, FileRef, Report, Severity, Verdict};
+use crate::{CheckResult, Diff, EvidenceData, FileRef, MultiReport, Report, Severity, Verdict};
 
 /// Render a report to a CommonMark-compatible Markdown string.
 ///
@@ -25,6 +29,53 @@ use crate::{CheckResult, EvidenceData, FileRef, Report, Severity, Verdict};
 pub fn to_markdown(report: &Report) -> String {
     let mut out = String::with_capacity(512);
     let _ = write_report(&mut out, report);
+    out
+}
+
+/// Render a [`Diff`] to a CommonMark-compatible Markdown string.
+///
+/// # Example
+///
+/// ```
+/// use dev_report::{markdown, CheckResult, Report, Severity};
+///
+/// let mut prev = Report::new("c", "0.1.0");
+/// prev.push(CheckResult::pass("a"));
+/// let mut curr = Report::new("c", "0.1.0");
+/// curr.push(CheckResult::fail("a", Severity::Error));
+///
+/// let diff = curr.diff(&prev);
+/// let md = markdown::diff_to_markdown(&diff);
+/// assert!(md.starts_with("# Diff"));
+/// assert!(md.contains("Newly failing"));
+/// ```
+pub fn diff_to_markdown(diff: &Diff) -> String {
+    let mut out = String::with_capacity(256);
+    let _ = write_diff(&mut out, diff);
+    out
+}
+
+/// Render a [`MultiReport`] to a CommonMark-compatible Markdown string.
+///
+/// Renders a top-level summary followed by each constituent report
+/// as an `## H2` section.
+///
+/// # Example
+///
+/// ```
+/// use dev_report::{markdown, CheckResult, MultiReport, Report};
+///
+/// let mut bench = Report::new("c", "0.1.0").with_producer("dev-bench");
+/// bench.push(CheckResult::pass("hot"));
+/// let mut multi = MultiReport::new("c", "0.1.0");
+/// multi.push(bench);
+///
+/// let md = markdown::multi_to_markdown(&multi);
+/// assert!(md.starts_with("# MultiReport"));
+/// ```
+pub fn multi_to_markdown(multi: &MultiReport) -> String {
+    let mut out = String::with_capacity(512);
+    let _ = write_multi(&mut out, multi);
     out
 }
 
@@ -169,6 +220,91 @@ fn severity_word(s: Severity) -> &'static str {
     }
 }
 
+fn write_diff(out: &mut String, d: &Diff) -> std::fmt::Result {
+    writeln!(out, "# Diff")?;
+    writeln!(out)?;
+    if d.is_clean() {
+        writeln!(out, "_clean (no differences)_")?;
+        return Ok(());
+    }
+    write_diff_list(out, "Newly failing", &d.newly_failing)?;
+    write_diff_list(out, "Newly passing", &d.newly_passing)?;
+    write_diff_list(out, "Added", &d.added)?;
+    write_diff_list(out, "Removed", &d.removed)?;
+    if !d.severity_changes.is_empty() {
+        writeln!(out, "## Severity changes")?;
+        writeln!(out)?;
+        writeln!(out, "| Check | From | To |")?;
+        writeln!(out, "|-------|------|----|")?;
+        for c in &d.severity_changes {
+            let from = c.from.map(severity_word).unwrap_or("none");
+            let to = c.to.map(severity_word).unwrap_or("none");
+            writeln!(out, "| {} | {} | {} |", c.name, from, to)?;
+        }
+        writeln!(out)?;
+    }
+    if !d.duration_regressions.is_empty() {
+        writeln!(out, "## Duration regressions")?;
+        writeln!(out)?;
+        writeln!(out, "| Check | Baseline (ms) | Current (ms) | Delta |")?;
+        writeln!(out, "|-------|---------------|--------------|-------|")?;
+        for r in &d.duration_regressions {
+            writeln!(
+                out,
+                "| {} | {} | {} | {:+.2}% |",
+                r.name, r.baseline_ms, r.current_ms, r.delta_pct
+            )?;
+        }
+        writeln!(out)?;
+    }
+    Ok(())
+}
+
+fn write_diff_list(out: &mut String, title: &str, items: &[String]) -> std::fmt::Result {
+    if items.is_empty() {
+        return Ok(());
+    }
+    writeln!(out, "## {}", title)?;
+    writeln!(out)?;
+    for name in items {
+        writeln!(out, "- `{}`", name)?;
+    }
+    writeln!(out)
+}
+
+fn write_multi(out: &mut String, m: &MultiReport) -> std::fmt::Result {
+    writeln!(out, "# MultiReport: {} {}", m.subject, m.subject_version)?;
+    writeln!(out)?;
+    writeln!(out, "- **Schema version:** {}", m.schema_version)?;
+    writeln!(out, "- **Reports:** {}", m.reports.len())?;
+    writeln!(out, "- **Total checks:** {}", m.total_check_count())?;
+    writeln!(
+        out,
+        "- **Started:** {}",
+        m.started_at.format("%Y-%m-%d %H:%M:%S UTC")
+    )?;
+    if let Some(end) = m.finished_at {
+        writeln!(
+            out,
+            "- **Finished:** {}",
+            end.format("%Y-%m-%d %H:%M:%S UTC")
+        )?;
+    }
+    writeln!(
+        out,
+        "- **Overall verdict:** **{}**",
+        verdict_word(m.overall_verdict())
+    )?;
+    writeln!(out)?;
+    writeln!(out, "---")?;
+    writeln!(out)?;
+    for r in &m.reports {
+        write_report(out, r)?;
+        writeln!(out)?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -261,5 +397,52 @@ mod tests {
         assert!(md.contains("# Report: nothing 0.0.0"));
         assert!(md.contains("**Overall verdict:** **SKIP**"));
         assert!(md.contains("| **Total** | **0** |"));
+    }
+
+    #[test]
+    fn diff_clean_renders() {
+        let mut a = Report::new("c", "0.1.0");
+        a.push(CheckResult::pass("x"));
+        let b = a.clone();
+        let md = diff_to_markdown(&a.diff(&b));
+        assert!(md.starts_with("# Diff"));
+        assert!(md.contains("clean"));
+    }
+
+    #[test]
+    fn diff_with_changes_renders_sections() {
+        let mut prev = Report::new("c", "0.1.0");
+        prev.push(CheckResult::pass("a"));
+        prev.push(CheckResult::pass("b"));
+
+        let mut curr = Report::new("c", "0.1.0");
+        curr.push(CheckResult::fail("a", Severity::Error));
+        curr.push(CheckResult::pass("c"));
+
+        let md = diff_to_markdown(&curr.diff(&prev));
+        assert!(md.contains("## Newly failing"));
+        assert!(md.contains("- `a`"));
+        assert!(md.contains("## Added"));
+        assert!(md.contains("- `c`"));
+        assert!(md.contains("## Removed"));
+        assert!(md.contains("- `b`"));
+    }
+
+    #[test]
+    fn multi_renders_each_report() {
+        let mut bench = Report::new("c", "0.1.0").with_producer("dev-bench");
+        bench.push(CheckResult::pass("hot"));
+        let mut chaos = Report::new("c", "0.1.0").with_producer("dev-chaos");
+        chaos.push(CheckResult::fail("recover", Severity::Critical));
+
+        let mut multi = MultiReport::new("c", "0.1.0");
+        multi.push(bench);
+        multi.push(chaos);
+
+        let md = multi_to_markdown(&multi);
+        assert!(md.starts_with("# MultiReport"));
+        assert!(md.contains("**Reports:** 2"));
+        assert!(md.contains("**Total checks:** 2"));
+        assert!(md.contains("# Report: c 0.1.0")); // each report rendered as section
     }
 }

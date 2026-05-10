@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-05-09
+
+### Added
+
+- `Report::passed()` / `failed()` / `warned()` / `skipped()` shortcut methods (and the same set on `MultiReport`).
+- `Report::checks_with_severity(severity)` and `MultiReport::checks_with_severity(severity)` filter iterators.
+- `Evidence::numeric_int(label, i64)` constructor for integer counters that may exceed `f64`'s 53-bit exact range.
+- `Diff::to_terminal()` / `to_terminal_color()` / `to_markdown()` rendering methods (gated by the `terminal` and `markdown` features respectively).
+- `MultiReport::to_terminal()` / `to_terminal_color()` / `to_markdown()` rendering methods.
+- New free functions in the `terminal` and `markdown` modules: `diff_to_terminal`, `diff_to_terminal_color`, `multi_to_terminal`, `multi_to_terminal_color`, `diff_to_markdown`, `multi_to_markdown`.
+
+### Changed
+
+- MSRV remains `1.85`. No schema changes; `schema_version` stays at `1`.
+
+### Fixed
+
+- Broken intra-doc link `[`alloc`]` referenced from the crate-level docstring of dev-bench would warn under `cargo doc` when the `alloc-tracking` feature is disabled. The link is now a plain code span. Mirrors the same fix in dev-async, dev-stress, dev-chaos.
+
+[0.9.1]: https://github.com/jamesgober/dev-report/releases/tag/v0.9.1
+
 ## [0.9.0] - 2026-05-08
 
 ### Added
@@ -81,5 +102,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 This is a name-claim release. The schema MAY change in subsequent `0.x` versions
 as the rest of the `dev-*` suite is built and the contract gets exercised.
 
-[Unreleased]: https://github.com/jamesgober/dev-report/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/jamesgober/dev-report/compare/v0.9.1...HEAD
 [0.1.0]: https://github.com/jamesgober/dev-report/releases/tag/v0.1.0
