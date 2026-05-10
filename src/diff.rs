@@ -131,6 +131,73 @@ impl Diff {
             && self.removed.is_empty()
     }
 
+    /// One-line summary of the diff suitable for log output or CI status.
+    ///
+    /// Returns `"clean"` when [`is_clean`](Self::is_clean) is true; otherwise
+    /// returns a comma-separated list of non-empty categories with counts,
+    /// e.g. `"2 newly failing, 1 added, 1 duration regression"`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use dev_report::{CheckResult, Report, Severity};
+    ///
+    /// // Identical reports -> "clean"
+    /// let mut a = Report::new("c", "0.1.0");
+    /// a.push(CheckResult::pass("x"));
+    /// assert_eq!(a.diff(&a).summary(), "clean");
+    ///
+    /// // Mixed differences -> comma-separated counts.
+    /// let mut prev = Report::new("c", "0.1.0");
+    /// prev.push(CheckResult::pass("a"));
+    /// let mut curr = Report::new("c", "0.1.0");
+    /// curr.push(CheckResult::fail("a", Severity::Error));
+    /// let s = curr.diff(&prev).summary();
+    /// assert!(s.contains("1 newly failing"));
+    /// assert!(s.contains("1 severity change"));
+    /// ```
+    pub fn summary(&self) -> String {
+        if self.is_clean() {
+            return "clean".to_string();
+        }
+        let mut parts = Vec::new();
+        if !self.newly_failing.is_empty() {
+            parts.push(format!("{} newly failing", self.newly_failing.len()));
+        }
+        if !self.newly_passing.is_empty() {
+            parts.push(format!("{} newly passing", self.newly_passing.len()));
+        }
+        if !self.severity_changes.is_empty() {
+            parts.push(format!(
+                "{} severity {}",
+                self.severity_changes.len(),
+                if self.severity_changes.len() == 1 {
+                    "change"
+                } else {
+                    "changes"
+                }
+            ));
+        }
+        if !self.duration_regressions.is_empty() {
+            parts.push(format!(
+                "{} duration {}",
+                self.duration_regressions.len(),
+                if self.duration_regressions.len() == 1 {
+                    "regression"
+                } else {
+                    "regressions"
+                }
+            ));
+        }
+        if !self.added.is_empty() {
+            parts.push(format!("{} added", self.added.len()));
+        }
+        if !self.removed.is_empty() {
+            parts.push(format!("{} removed", self.removed.len()));
+        }
+        parts.join(", ")
+    }
+
     /// Render this diff as a TTY-friendly string. Monochrome.
     ///
     /// Available with the `terminal` feature.
@@ -430,5 +497,46 @@ mod tests {
         let json = serde_json::to_string(&d).unwrap();
         let back: Diff = serde_json::from_str(&json).unwrap();
         assert_eq!(d, back);
+    }
+
+    #[test]
+    fn summary_reports_clean_when_identical() {
+        let mut a = r("c", "0.1.0");
+        a.push(CheckResult::pass("x"));
+        let b = a.clone();
+        assert_eq!(
+            diff_reports(&a, &b, &DiffOptions::default()).summary(),
+            "clean"
+        );
+    }
+
+    #[test]
+    fn summary_lists_all_categories() {
+        let mut prev = r("c", "0.1.0");
+        prev.push(CheckResult::fail("a", Severity::Error));
+        prev.push(CheckResult::pass("gone"));
+        let mut curr = r("c", "0.1.0");
+        curr.push(CheckResult::pass("a")); // newly_passing
+        curr.push(CheckResult::fail("b", Severity::Error)); // newly_failing + added
+        curr.push(CheckResult::pass("new")); // newly_passing + added
+
+        let d = diff_reports(&curr, &prev, &DiffOptions::default());
+        let s = d.summary();
+        assert!(s.contains("newly failing"));
+        assert!(s.contains("newly passing"));
+        assert!(s.contains("added"));
+        assert!(s.contains("removed"));
+    }
+
+    #[test]
+    fn summary_pluralizes_correctly() {
+        let mut prev = r("c", "0.1.0");
+        prev.push(CheckResult::warn("a", Severity::Warning));
+        let mut curr = r("c", "0.1.0");
+        curr.push(CheckResult::warn("a", Severity::Error));
+        // Single severity change -> singular.
+        let s = diff_reports(&curr, &prev, &DiffOptions::default()).summary();
+        assert!(s.contains("1 severity change"));
+        assert!(!s.contains("changes"));
     }
 }

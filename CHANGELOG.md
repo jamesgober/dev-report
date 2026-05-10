@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-05-10
+
+### Added
+
+- `Diff::summary()` returns a one-line human-readable summary, e.g. `"clean"` or `"2 newly failing, 1 added"`. Useful for log output and CI status lines without parsing the full structure.
+- `Report::set_started_at(ts)` and `Report::set_finished_at(ts)` setters for replay/import scenarios where the real timestamps are known but `Utc::now()` would be wrong.
+- `Report::verdict_counts() -> (pass, fail, warn, skip)` for one-shot count aggregation.
+- `MultiReport::iter_reports()` iterator over constituent reports.
+- `MultiReport::report_from(producer_name)` lookup by producer.
+- `MultiReport::verdict_counts()` aggregate across all constituent reports.
+
+### Changed
+
+- No schema changes. `schema_version` stays at `1`.
+
+[0.9.2]: https://github.com/jamesgober/dev-report/releases/tag/v0.9.2
+
 ## [0.9.1] - 2026-05-09
 
 ### Added
@@ -102,5 +119,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 This is a name-claim release. The schema MAY change in subsequent `0.x` versions
 as the rest of the `dev-*` suite is built and the contract gets exercised.
 
-[Unreleased]: https://github.com/jamesgober/dev-report/compare/v0.9.1...HEAD
+[Unreleased]: https://github.com/jamesgober/dev-report/compare/v0.9.2...HEAD
 [0.1.0]: https://github.com/jamesgober/dev-report/releases/tag/v0.1.0

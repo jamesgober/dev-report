@@ -715,6 +715,75 @@ impl Report {
         self.finished_at = Some(Utc::now());
     }
 
+    /// Override `started_at` with a fixed timestamp.
+    ///
+    /// Useful when reconstructing a `Report` from external data
+    /// (replay, import from a different schema, deterministic test
+    /// fixtures). Most producers should let `Report::new` capture the
+    /// real start time and not call this.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use chrono::TimeZone;
+    /// use dev_report::Report;
+    ///
+    /// let mut r = Report::new("crate", "0.1.0");
+    /// let frozen = chrono::Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+    /// r.set_started_at(frozen);
+    /// assert_eq!(r.started_at, frozen);
+    /// ```
+    pub fn set_started_at(&mut self, ts: DateTime<Utc>) {
+        self.started_at = ts;
+    }
+
+    /// Override `finished_at` with a fixed timestamp.
+    ///
+    /// Useful for replay / import scenarios where the real finish
+    /// time is known but `Utc::now()` would be wrong.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use chrono::TimeZone;
+    /// use dev_report::Report;
+    ///
+    /// let mut r = Report::new("crate", "0.1.0");
+    /// let frozen = chrono::Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 1).unwrap();
+    /// r.set_finished_at(Some(frozen));
+    /// assert_eq!(r.finished_at, Some(frozen));
+    /// ```
+    pub fn set_finished_at(&mut self, ts: Option<DateTime<Utc>>) {
+        self.finished_at = ts;
+    }
+
+    /// Count of checks per verdict, returned as `(pass, fail, warn, skip)`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use dev_report::{CheckResult, Report, Severity};
+    ///
+    /// let mut r = Report::new("c", "0.1.0");
+    /// r.push(CheckResult::pass("a"));
+    /// r.push(CheckResult::pass("b"));
+    /// r.push(CheckResult::fail("c", Severity::Error));
+    /// let (pass, fail, warn, skip) = r.verdict_counts();
+    /// assert_eq!((pass, fail, warn, skip), (2, 1, 0, 0));
+    /// ```
+    pub fn verdict_counts(&self) -> (usize, usize, usize, usize) {
+        let (mut p, mut f, mut w, mut s) = (0, 0, 0, 0);
+        for c in &self.checks {
+            match c.verdict {
+                Verdict::Pass => p += 1,
+                Verdict::Fail => f += 1,
+                Verdict::Warn => w += 1,
+                Verdict::Skip => s += 1,
+            }
+        }
+        (p, f, w, s)
+    }
+
     /// Compute the overall verdict for this report.
     ///
     /// Rules:
@@ -1156,6 +1225,34 @@ mod tests {
 
         let warns: Vec<_> = r.checks_with_severity(Severity::Warning).collect();
         assert_eq!(warns.len(), 1);
+    }
+
+    #[test]
+    fn report_verdict_counts() {
+        let mut r = Report::new("c", "0.1.0");
+        r.push(CheckResult::pass("a"));
+        r.push(CheckResult::pass("b"));
+        r.push(CheckResult::fail("c", Severity::Error));
+        r.push(CheckResult::warn("d", Severity::Warning));
+        r.push(CheckResult::skip("e"));
+        assert_eq!(r.verdict_counts(), (2, 1, 1, 1));
+    }
+
+    #[test]
+    fn report_set_started_finished_at_overrides() {
+        use chrono::TimeZone;
+        let mut r = Report::new("c", "0.1.0");
+        let frozen_start = chrono::Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+        let frozen_end = chrono::Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 1).unwrap();
+        r.set_started_at(frozen_start);
+        r.set_finished_at(Some(frozen_end));
+        assert_eq!(r.started_at, frozen_start);
+        assert_eq!(r.finished_at, Some(frozen_end));
+        // Round-trip through JSON preserves the override.
+        let json = r.to_json().unwrap();
+        let parsed = Report::from_json(&json).unwrap();
+        assert_eq!(parsed.started_at, frozen_start);
+        assert_eq!(parsed.finished_at, Some(frozen_end));
     }
 
     // ------------------------------------------------------------

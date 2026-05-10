@@ -109,6 +109,86 @@ impl MultiReport {
         self.reports.iter().map(|r| r.checks.len()).sum()
     }
 
+    /// Iterate over the constituent reports.
+    ///
+    /// Equivalent to `self.reports.iter()` but reads cleaner at the
+    /// call site and makes the public iteration API explicit.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use dev_report::{CheckResult, MultiReport, Report};
+    ///
+    /// let mut bench = Report::new("c", "0.1.0").with_producer("dev-bench");
+    /// bench.push(CheckResult::pass("hot"));
+    /// let mut multi = MultiReport::new("c", "0.1.0");
+    /// multi.push(bench);
+    ///
+    /// for r in multi.iter_reports() {
+    ///     assert_eq!(r.subject, "c");
+    /// }
+    /// ```
+    pub fn iter_reports(&self) -> impl Iterator<Item = &Report> {
+        self.reports.iter()
+    }
+
+    /// Find the constituent report from a specific producer, if any.
+    ///
+    /// Returns the first match (`MultiReport` doesn't enforce
+    /// uniqueness; producers can appear multiple times).
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use dev_report::{CheckResult, MultiReport, Report};
+    ///
+    /// let mut bench = Report::new("c", "0.1.0").with_producer("dev-bench");
+    /// bench.push(CheckResult::pass("hot"));
+    /// let mut multi = MultiReport::new("c", "0.1.0");
+    /// multi.push(bench);
+    ///
+    /// let found = multi.report_from("dev-bench").unwrap();
+    /// assert_eq!(found.checks.len(), 1);
+    /// ```
+    pub fn report_from(&self, producer: &str) -> Option<&Report> {
+        self.reports
+            .iter()
+            .find(|r| r.producer.as_deref() == Some(producer))
+    }
+
+    /// Aggregate verdict counts across all constituent reports as
+    /// `(pass, fail, warn, skip)`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use dev_report::{CheckResult, MultiReport, Report, Severity};
+    ///
+    /// let mut a = Report::new("c", "0.1.0").with_producer("a");
+    /// a.push(CheckResult::pass("x"));
+    /// a.push(CheckResult::fail("y", Severity::Error));
+    /// let mut b = Report::new("c", "0.1.0").with_producer("b");
+    /// b.push(CheckResult::pass("z"));
+    /// let mut multi = MultiReport::new("c", "0.1.0");
+    /// multi.push(a);
+    /// multi.push(b);
+    /// assert_eq!(multi.verdict_counts(), (2, 1, 0, 0));
+    /// ```
+    pub fn verdict_counts(&self) -> (usize, usize, usize, usize) {
+        let (mut p, mut f, mut w, mut s) = (0, 0, 0, 0);
+        for r in &self.reports {
+            for c in &r.checks {
+                match c.verdict {
+                    Verdict::Pass => p += 1,
+                    Verdict::Fail => f += 1,
+                    Verdict::Warn => w += 1,
+                    Verdict::Skip => s += 1,
+                }
+            }
+        }
+        (p, f, w, s)
+    }
+
     /// Iterate over every check across every constituent report,
     /// paired with the producer that emitted it.
     ///
@@ -329,5 +409,47 @@ mod tests {
         assert_eq!(parsed.subject, "c");
         assert_eq!(parsed.reports.len(), 1);
         assert_eq!(parsed.overall_verdict(), Verdict::Fail);
+    }
+
+    #[test]
+    fn iter_reports_yields_each_report() {
+        let mut m = MultiReport::new("c", "0.1.0");
+        m.push(rep("a", vec![CheckResult::pass("x")]));
+        m.push(rep("b", vec![CheckResult::pass("y")]));
+        let producers: Vec<&str> = m
+            .iter_reports()
+            .filter_map(|r| r.producer.as_deref())
+            .collect();
+        assert_eq!(producers, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn report_from_finds_by_producer() {
+        let mut m = MultiReport::new("c", "0.1.0");
+        m.push(rep("dev-bench", vec![CheckResult::pass("hot")]));
+        m.push(rep("dev-chaos", vec![CheckResult::pass("recover")]));
+        assert!(m.report_from("dev-bench").is_some());
+        assert!(m.report_from("dev-chaos").is_some());
+        assert!(m.report_from("not-here").is_none());
+    }
+
+    #[test]
+    fn multi_verdict_counts_aggregates() {
+        let mut m = MultiReport::new("c", "0.1.0");
+        m.push(rep(
+            "a",
+            vec![
+                CheckResult::pass("x"),
+                CheckResult::fail("y", Severity::Error),
+            ],
+        ));
+        m.push(rep(
+            "b",
+            vec![
+                CheckResult::pass("z"),
+                CheckResult::warn("w", Severity::Warning),
+            ],
+        ));
+        assert_eq!(m.verdict_counts(), (2, 1, 1, 0));
     }
 }
