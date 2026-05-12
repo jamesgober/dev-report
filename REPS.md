@@ -149,6 +149,18 @@ The JSON wire format MUST round-trip through `to_json` / `from_json`
 without information loss. Field names MUST use `snake_case`. Enum
 variants MUST use `lowercase`.
 
+The canonical JSON Schema document for this wire format MUST live in
+the crate at `schema/report.schema.json`. The schema MUST conform to
+JSON Schema Draft 2020-12 and MUST describe every type in section 5
+(`Report`, `MultiReport`, `CheckResult`, `Verdict`, `Severity`,
+`Evidence`, `EvidenceData`, `FileRef`).
+
+A document that successfully validates against `schema/report.schema.json`
+MUST also deserialize via `Report::from_json` or `MultiReport::from_json`
+without error. The Rust types and the schema MUST stay in sync: CI MUST
+generate a sample document exercising every variant and validate it
+against the schema on every run.
+
 ### 7.1 Backward compatibility (additive fields)
 
 When new optional fields are added during the `0.x` line:

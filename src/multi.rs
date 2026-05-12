@@ -305,6 +305,29 @@ impl MultiReport {
     pub fn to_markdown(&self) -> String {
         crate::markdown::multi_to_markdown(self)
     }
+
+    /// Render this multi-report as a SARIF 2.1.0 document.
+    ///
+    /// Each constituent [`Report`] becomes its own SARIF `run`, so
+    /// consumers can tell which producer emitted which finding. Only
+    /// `Fail` and `Warn` checks are emitted.
+    ///
+    /// Available with the `sarif` feature.
+    #[cfg(feature = "sarif")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "sarif")))]
+    pub fn to_sarif(&self) -> String {
+        crate::sarif::multi_to_sarif(self)
+    }
+
+    /// Render this multi-report as a JUnit XML document with one
+    /// `<testsuite>` per constituent [`Report`].
+    ///
+    /// Available with the `junit` feature.
+    #[cfg(feature = "junit")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "junit")))]
+    pub fn to_junit_xml(&self) -> String {
+        crate::junit::multi_to_junit_xml(self)
+    }
 }
 
 #[cfg(test)]

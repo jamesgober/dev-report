@@ -43,6 +43,16 @@ chrono = { version = "0.4", default-features = false, features = ["serde", "cloc
 default = []
 markdown = []
 terminal = []
+sarif = []
+junit = []
+
+[[example]]
+name = "sarif_export"
+required-features = ["sarif"]
+
+[[example]]
+name = "junit_export"
+required-features = ["junit"]
 
 [profile.release]
 opt-level = 3

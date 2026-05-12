@@ -168,15 +168,25 @@ let json = multi.to_json().unwrap();
 
 ## Output formats
 
-Two opt-in features render a `Report` for human consumption. Both are
-pure functions; JSON remains the only round-trippable wire format.
+Four opt-in features render a `Report` (and `MultiReport`) into other
+formats. All are pure functions; JSON remains the only round-trippable
+wire format.
 
-- `terminal` — `Report::to_terminal` (monochrome) and
-  `Report::to_terminal_color` (ANSI). 80-column friendly. No new
-  dependencies.
-- `markdown` — `Report::to_markdown` emits a CommonMark-compatible
-  document preserving every fact (verdict, severity, tags, evidence,
-  durations). No new dependencies.
+- `terminal` — `to_terminal` / `to_terminal_color` (ANSI). 80-column
+  friendly. No new dependencies.
+- `markdown` — `to_markdown` emits a CommonMark-compatible document
+  preserving every fact (verdict, severity, tags, evidence, durations).
+  No new dependencies.
+- `sarif` — `to_sarif` emits a SARIF 2.1.0 document. Only `Fail` and
+  `Warn` checks are included (SARIF is a defect-report format).
+  Severity maps to SARIF `level`: `Critical`/`Error` → `error`,
+  `Warning` → `warning`, `Info` → `note`. `Evidence::FileRef` becomes
+  a SARIF `physicalLocation`. No new dependencies.
+- `junit` — `to_junit_xml` emits a Jenkins/Surefire JUnit XML
+  document. Every check becomes a `<testcase>`; fails get a
+  `<failure>` child, skips get a `<skipped/>` child, warns are emitted
+  as passing testcases (JUnit has no native warn representation; use
+  SARIF for warns). No new dependencies.
 
 ## Verdict rules
 
@@ -188,6 +198,21 @@ Computed by `Report::overall_verdict()`:
 | Else any check is `Warn` | `Warn` |
 | Else any check is `Pass` | `Pass` |
 | Else (all `Skip` or empty) | `Skip` |
+
+## Wire format and JSON Schema
+
+The canonical wire format for both `Report` and `MultiReport` is JSON. A
+JSON Schema document (Draft 2020-12) describing every field is shipped in
+the crate at [`schema/report.schema.json`](schema/report.schema.json).
+
+The schema is the contract for cross-language consumers: a TypeScript /
+Python / Go / `jq` user can write tooling against a `Report` without
+touching Rust. The schema covers all of `Report`, `MultiReport`,
+`CheckResult`, `Verdict`, `Severity`, `Evidence`, `EvidenceData`, and
+`FileRef`, with field-level descriptions.
+
+CI validates a generated sample against the schema on every run via
+`scripts/validate_schema.py` and the `schema_sample` example.
 
 ## The `dev-*` suite
 

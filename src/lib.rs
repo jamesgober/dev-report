@@ -47,6 +47,14 @@ pub mod terminal;
 #[cfg_attr(docsrs, doc(cfg(feature = "markdown")))]
 pub mod markdown;
 
+#[cfg(feature = "sarif")]
+#[cfg_attr(docsrs, doc(cfg(feature = "sarif")))]
+pub mod sarif;
+
+#[cfg(feature = "junit")]
+#[cfg_attr(docsrs, doc(cfg(feature = "junit")))]
+pub mod junit;
+
 mod diff;
 pub use diff::{Diff, DiffOptions, DurationRegression, SeverityChange};
 
@@ -965,6 +973,32 @@ impl Report {
     #[cfg_attr(docsrs, doc(cfg(feature = "markdown")))]
     pub fn to_markdown(&self) -> String {
         markdown::to_markdown(self)
+    }
+
+    /// Render this report as a SARIF 2.1.0 document.
+    ///
+    /// Only `Fail` and `Warn` checks are emitted; `Pass` and `Skip` are
+    /// omitted (SARIF is a defect report format). See [`crate::sarif`]
+    /// for the severity-to-level mapping.
+    ///
+    /// Available with the `sarif` feature.
+    #[cfg(feature = "sarif")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "sarif")))]
+    pub fn to_sarif(&self) -> String {
+        sarif::to_sarif(self)
+    }
+
+    /// Render this report as a JUnit XML document.
+    ///
+    /// Every check becomes a `<testcase>`; fail verdicts emit a
+    /// `<failure>` child, skip verdicts emit a `<skipped/>` child. See
+    /// [`crate::junit`] for the verdict-to-element mapping.
+    ///
+    /// Available with the `junit` feature.
+    #[cfg(feature = "junit")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "junit")))]
+    pub fn to_junit_xml(&self) -> String {
+        junit::to_junit_xml(self)
     }
 
     /// Compare this report against a baseline using default options.

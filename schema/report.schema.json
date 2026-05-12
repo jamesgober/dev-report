@@ -1,0 +1,251 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://raw.githubusercontent.com/jamesgober/dev-report/main/schema/report.schema.json",
+    "title": "dev-report wire format",
+    "description": "Canonical JSON shape for dev-report Report and MultiReport documents. schema_version is locked to 1 across all dev-report 0.x releases. A document that validates against this schema can be deserialized into the corresponding dev-report Rust types.",
+    "oneOf": [
+        { "$ref": "#/$defs/Report" },
+        { "$ref": "#/$defs/MultiReport" }
+    ],
+    "$defs": {
+        "Report": {
+            "type": "object",
+            "title": "Report",
+            "description": "Output of one verification run by a single producer (e.g. dev-bench, dev-chaos). Carries identifying metadata about the subject under test, run timestamps, and the individual CheckResults emitted during the run.",
+            "required": [
+                "schema_version",
+                "subject",
+                "subject_version",
+                "producer",
+                "started_at",
+                "finished_at",
+                "checks"
+            ],
+            "properties": {
+                "schema_version": {
+                    "type": "integer",
+                    "const": 1,
+                    "description": "Schema version for this document. Locked to 1 across all dev-report 0.x releases."
+                },
+                "subject": {
+                    "type": "string",
+                    "description": "Identifier of the crate or project being reported on (e.g. \"my-crate\")."
+                },
+                "subject_version": {
+                    "type": "string",
+                    "description": "Version of the subject at the time of the run. Typically a SemVer string but no format is enforced."
+                },
+                "producer": {
+                    "type": ["string", "null"],
+                    "description": "Name of the producer that generated this report (e.g. \"dev-bench\"). Null when the producer was not declared."
+                },
+                "started_at": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "RFC 3339 timestamp marking when the run began."
+                },
+                "finished_at": {
+                    "type": ["string", "null"],
+                    "format": "date-time",
+                    "description": "RFC 3339 timestamp marking when the run ended. Null when the report has not yet been finalized via Report::finish."
+                },
+                "checks": {
+                    "type": "array",
+                    "items": { "$ref": "#/$defs/CheckResult" },
+                    "description": "Individual CheckResults emitted during the run, in the order they were pushed."
+                }
+            }
+        },
+        "MultiReport": {
+            "type": "object",
+            "title": "MultiReport",
+            "description": "Aggregate of multiple Reports from different producers in a single run. Check identity in a MultiReport is (producer, name); a check name that appears under two producers is kept as two separate entries, not merged.",
+            "required": [
+                "schema_version",
+                "subject",
+                "subject_version",
+                "started_at",
+                "reports"
+            ],
+            "properties": {
+                "schema_version": {
+                    "type": "integer",
+                    "const": 1,
+                    "description": "Schema version for this document. Matches Report.schema_version."
+                },
+                "subject": {
+                    "type": "string",
+                    "description": "Identifier of the crate or project being reported on."
+                },
+                "subject_version": {
+                    "type": "string",
+                    "description": "Version of the subject at the time of the run."
+                },
+                "started_at": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "RFC 3339 timestamp marking when aggregation began."
+                },
+                "finished_at": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "RFC 3339 timestamp marking when aggregation ended. Absent (field omitted) when the aggregate has not yet been finalized via MultiReport::finish."
+                },
+                "reports": {
+                    "type": "array",
+                    "items": { "$ref": "#/$defs/Report" },
+                    "description": "Constituent Reports collected in this aggregate, in the order they were pushed."
+                }
+            }
+        },
+        "CheckResult": {
+            "type": "object",
+            "title": "CheckResult",
+            "description": "Outcome of a single check. Carries a Verdict, an optional Severity, optional human-readable detail, a timestamp, an optional duration, and optional tags and Evidence attachments.",
+            "required": [
+                "name",
+                "verdict",
+                "severity",
+                "detail",
+                "at",
+                "duration_ms"
+            ],
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Stable identifier for this check (e.g. \"compile\", \"test::round_trip\", \"bench::parse\")."
+                },
+                "verdict": { "$ref": "#/$defs/Verdict" },
+                "severity": {
+                    "oneOf": [
+                        { "type": "null" },
+                        { "$ref": "#/$defs/Severity" }
+                    ],
+                    "description": "Severity classification when verdict is fail or warn. Null for pass and skip."
+                },
+                "detail": {
+                    "type": ["string", "null"],
+                    "description": "Optional free-form human-readable detail. Null when no detail was attached."
+                },
+                "at": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "RFC 3339 timestamp marking when this check ran."
+                },
+                "duration_ms": {
+                    "type": ["integer", "null"],
+                    "minimum": 0,
+                    "description": "Optional duration in milliseconds. Null when no duration was measured."
+                },
+                "tags": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "default": [],
+                    "description": "Free-form filter tags (e.g. \"slow\", \"flaky\", \"bench\"). Omitted from output when empty. v0.1.0-shape documents that lack this field deserialize cleanly with an empty list."
+                },
+                "evidence": {
+                    "type": "array",
+                    "items": { "$ref": "#/$defs/Evidence" },
+                    "default": [],
+                    "description": "Structured Evidence attachments backing this check. Omitted from output when empty. v0.1.0-shape documents that lack this field deserialize cleanly with an empty list."
+                }
+            }
+        },
+        "Verdict": {
+            "type": "string",
+            "title": "Verdict",
+            "description": "Outcome classification for a single check or for a whole Report. Precedence when summarized over many checks: fail > warn > pass > skip. An empty Report (no checks) reports skip.",
+            "enum": ["pass", "fail", "warn", "skip"]
+        },
+        "Severity": {
+            "type": "string",
+            "title": "Severity",
+            "description": "Severity classification attached to fail and warn verdicts. info does not block acceptance. warning allows acceptance with explicit acknowledgement. error blocks acceptance. critical blocks acceptance and signals a regression.",
+            "enum": ["info", "warning", "error", "critical"]
+        },
+        "FileRef": {
+            "type": "object",
+            "title": "FileRef",
+            "description": "Reference to a file at an optional line range. Path is either absolute or relative to the producer's working directory at run time.",
+            "required": ["path"],
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "File path. Absolute, or relative to the producer's CWD at the time the report was produced."
+                },
+                "line_start": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Starting line of the referenced range (1-indexed, inclusive). Omitted when no line range was attached."
+                },
+                "line_end": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Ending line of the referenced range (1-indexed, inclusive). Omitted when no line range was attached."
+                }
+            }
+        },
+        "Evidence": {
+            "type": "object",
+            "title": "Evidence",
+            "description": "Structured datum backing a CheckResult. Carries a short label and a typed payload (numeric, key/value, snippet, or file reference). Consumers can read the typed payload directly without parsing the free-form detail field.",
+            "required": ["label", "data"],
+            "properties": {
+                "label": {
+                    "type": "string",
+                    "description": "Short human-readable label for the datum (e.g. \"ops_per_sec\", \"mean_ns\", \"call_site\")."
+                },
+                "data": { "$ref": "#/$defs/EvidenceData" }
+            }
+        },
+        "EvidenceData": {
+            "title": "EvidenceData",
+            "description": "Typed payload for an Evidence attachment. Externally tagged: the variant name is the single property name on the object, and the variant value is its property value. The four variant names correspond to the EvidenceKind discriminator in the Rust API: numeric, key_value, snippet, file_ref.",
+            "oneOf": [
+                {
+                    "type": "object",
+                    "title": "EvidenceData.numeric",
+                    "description": "Single floating-point measurement (e.g. mean_ns, ops_per_sec). Stored as f64 on the wire. Integer values up to 2^53 round-trip exactly.",
+                    "required": ["numeric"],
+                    "properties": {
+                        "numeric": { "type": "number" }
+                    },
+                    "additionalProperties": false
+                },
+                {
+                    "type": "object",
+                    "title": "EvidenceData.key_value",
+                    "description": "String-to-string map (e.g. environment, configuration). Keys are sorted in serialized output so JSON is deterministic.",
+                    "required": ["key_value"],
+                    "properties": {
+                        "key_value": {
+                            "type": "object",
+                            "additionalProperties": { "type": "string" }
+                        }
+                    },
+                    "additionalProperties": false
+                },
+                {
+                    "type": "object",
+                    "title": "EvidenceData.snippet",
+                    "description": "Short snippet of text or code (e.g. a panic message, a source excerpt, a log line).",
+                    "required": ["snippet"],
+                    "properties": {
+                        "snippet": { "type": "string" }
+                    },
+                    "additionalProperties": false
+                },
+                {
+                    "type": "object",
+                    "title": "EvidenceData.file_ref",
+                    "description": "Reference to a file at an optional line range. See FileRef.",
+                    "required": ["file_ref"],
+                    "properties": {
+                        "file_ref": { "$ref": "#/$defs/FileRef" }
+                    },
+                    "additionalProperties": false
+                }
+            ]
+        }
+    }
+}

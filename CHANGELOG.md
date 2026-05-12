@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- JSON Schema document at `schema/report.schema.json` (Draft 2020-12) describing the wire format for `Report` and `MultiReport`. Field-level descriptions cover `Verdict`, `Severity`, `Evidence`, `EvidenceData`, `FileRef`, `CheckResult`, `Report`, and `MultiReport`. Enables cross-language consumers (TypeScript, Python, Go, `jq`) to validate or generate dev-report documents without touching Rust.
+- `examples/schema_sample.rs` emits a JSON document exercising every schema variant. Used by CI as the validation sample.
+- `scripts/validate_schema.py` validates JSON documents against `schema/report.schema.json` using the `jsonschema` Python package.
+- New `sarif` feature: `Report::to_sarif()` and `MultiReport::to_sarif()` emit SARIF 2.1.0 documents. Only `Fail` and `Warn` checks are emitted; pass and skip are omitted (SARIF is a defect-report format). Severity maps to SARIF `level` (`Critical`/`Error` → `error`, `Warning` → `warning`, `Info` → `note`). `Evidence::FileRef` becomes a SARIF `physicalLocation` with optional line range. `MultiReport` emits one SARIF `run` per constituent producer. No new runtime dependencies; uses the existing `serde_json`.
+- New `junit` feature: `Report::to_junit_xml()` and `MultiReport::to_junit_xml()` emit Jenkins/Surefire JUnit XML documents. Pass/Warn become self-closing `<testcase>`; Fail produces `<failure>` with a severity-derived `type` attribute; Skip produces `<skipped/>`. Durations propagate as `time` attributes in seconds. XML attribute and text values are escaped. No external dependencies.
+- `examples/sarif_export.rs` and `examples/junit_export.rs` demonstrate each exporter.
+- `scripts/validate_sarif.py` performs structural validation of the SARIF subset dev-report emits.
+- `scripts/validate_junit.py` round-trips JUnit XML through `xml.etree.ElementTree` and cross-checks declared counts against child element counts.
+
+### Changed
+
+- CI: `actions/checkout` bumped to `v5` (was `v4`); removes Node 20 deprecation warnings.
+- CI: new `wire-format` job generates samples for every output format (JSON, SARIF, JUnit) and validates each.
+- REPS.md § 7 now binds the JSON wire format to `schema/report.schema.json` as the canonical contract.
+- No schema changes. `schema_version` stays at `1`. SARIF and JUnit exporters do not alter the JSON wire format.
+
 ## [0.9.2] - 2026-05-10
 
 ### Added
