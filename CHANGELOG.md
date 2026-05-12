@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.5] - 2026-05-12
+
+Bug-fix release surfaced by the post-polish audit pass.
+
+### Fixed
+
+- `Evidence::numeric()` now coerces `NaN`, `+Infinity`, and `-Infinity` to `0.0` at construction. Previously, a `Report` containing a non-finite numeric value would compile cleanly and accept the value, then panic at serialization time inside `to_json()`, `to_sarif()`, or any other JSON-emitting path (`serde_json::Number::from_f64` returns `None` for non-finite, and the surrounding code unwrapped that). Real-world measurements occasionally produce `NaN` (e.g. division-by-zero in custom percentile maths) — coercing at the constructor lets the report survive the round-trip.
+
+### Internal
+
+- New test `evidence_numeric_coerces_nan_and_inf_to_zero` pins the behavior for `NaN`, `+Inf`, and `-Inf`, and exercises a full `Report::to_json()` round-trip with a non-finite measurement.
+
+[0.9.5]: https://github.com/jamesgober/dev-report/releases/tag/v0.9.5
+
 ## [0.9.4] - 2026-05-12
 
 Documentation and SEO pass. No code changes.
