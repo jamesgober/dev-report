@@ -112,10 +112,7 @@ fn run_for(report: &Report) -> Value {
 
 fn result_for(check: &CheckResult) -> Value {
     let level = level_for(check.severity);
-    let message_text = check
-        .detail
-        .clone()
-        .unwrap_or_else(|| check.name.clone());
+    let message_text = check.detail.clone().unwrap_or_else(|| check.name.clone());
     let mut result = json!({
         "ruleId": check.name,
         "level": level,
@@ -146,10 +143,7 @@ fn level_for(severity: Option<Severity>) -> &'static str {
 
 fn location_for(file_ref: &crate::FileRef) -> Value {
     let mut physical = serde_json::Map::new();
-    physical.insert(
-        "artifactLocation".into(),
-        json!({ "uri": file_ref.path }),
-    );
+    physical.insert("artifactLocation".into(), json!({ "uri": file_ref.path }));
     if file_ref.line_start.is_some() || file_ref.line_end.is_some() {
         let mut region = serde_json::Map::new();
         if let Some(s) = file_ref.line_start {
@@ -219,11 +213,10 @@ mod tests {
     fn file_ref_without_line_range_omits_region() {
         let mut r = Report::new("c", "0.1.0").with_producer("p");
         r.push(
-            CheckResult::fail("oops", Severity::Error)
-                .with_evidence(Evidence {
-                    label: "src".into(),
-                    data: EvidenceData::FileRef(FileRef::new("src/lib.rs")),
-                }),
+            CheckResult::fail("oops", Severity::Error).with_evidence(Evidence {
+                label: "src".into(),
+                data: EvidenceData::FileRef(FileRef::new("src/lib.rs")),
+            }),
         );
         let sarif = to_sarif(&r);
         let v: Value = serde_json::from_str(&sarif).unwrap();
@@ -273,7 +266,10 @@ mod tests {
         r.push(CheckResult::fail("a", Severity::Error).with_detail("the exact reason"));
         let sarif = to_sarif(&r);
         let v: Value = serde_json::from_str(&sarif).unwrap();
-        assert_eq!(v["runs"][0]["results"][0]["message"]["text"], "the exact reason");
+        assert_eq!(
+            v["runs"][0]["results"][0]["message"]["text"],
+            "the exact reason"
+        );
     }
 
     #[test]
