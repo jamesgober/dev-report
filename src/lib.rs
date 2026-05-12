@@ -225,6 +225,11 @@ impl Evidence {
     /// assert_eq!(e.label, "ops_per_sec");
     /// ```
     pub fn numeric(label: impl Into<String>, value: f64) -> Self {
+        // JSON does not have a representation for NaN / +Inf / -Inf;
+        // serde_json::to_string would fail at serialize time. Coerce
+        // non-finite values to 0.0 at construction so a `Report`
+        // built from arbitrary measurements can always be serialized.
+        let value = if value.is_finite() { value } else { 0.0 };
         Self {
             label: label.into(),
             data: EvidenceData::Numeric(value),
@@ -1224,6 +1229,27 @@ mod tests {
         } else {
             panic!("expected Numeric");
         }
+    }
+
+    #[test]
+    fn evidence_numeric_coerces_nan_and_inf_to_zero() {
+        // JSON has no representation for NaN / Inf, so serializing a
+        // report containing them would fail at runtime. The constructor
+        // coerces non-finite to 0.0 so a Report can always be serialized.
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let e = Evidence::numeric("x", bad);
+            if let EvidenceData::Numeric(n) = e.data {
+                assert_eq!(n, 0.0, "non-finite input should coerce to 0.0");
+            } else {
+                panic!("expected Numeric");
+            }
+        }
+        // A round-trip through JSON now succeeds even when the original
+        // measurement was non-finite.
+        let mut r = Report::new("c", "0.1.0");
+        r.push(CheckResult::pass("k").with_evidence(Evidence::numeric("ratio", f64::NAN)));
+        let json = r.to_json().expect("non-finite must not break serialization");
+        assert!(json.contains("\"ratio\""));
     }
 
     #[test]
