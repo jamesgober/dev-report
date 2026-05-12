@@ -239,7 +239,7 @@ fn write_diff(out: &mut String, d: &Diff) -> std::fmt::Result {
         for c in &d.severity_changes {
             let from = c.from.map(severity_word).unwrap_or("none");
             let to = c.to.map(severity_word).unwrap_or("none");
-            writeln!(out, "| {} | {} | {} |", c.name, from, to)?;
+            writeln!(out, "| {} | {} | {} |", escape_table_cell(&c.name), from, to)?;
         }
         writeln!(out)?;
     }
@@ -252,12 +252,33 @@ fn write_diff(out: &mut String, d: &Diff) -> std::fmt::Result {
             writeln!(
                 out,
                 "| {} | {} | {} | {:+.2}% |",
-                r.name, r.baseline_ms, r.current_ms, r.delta_pct
+                escape_table_cell(&r.name),
+                r.baseline_ms,
+                r.current_ms,
+                r.delta_pct
             )?;
         }
         writeln!(out)?;
     }
     Ok(())
+}
+
+/// Escape a string for safe inclusion in a markdown table cell.
+///
+/// The cell delimiter is `|`; a literal pipe inside a value would
+/// split the cell and shift later columns. CommonMark allows
+/// backslash-escaping the pipe (`\|`) inside a table cell. Newlines
+/// also break tables; replace them with `<br>` so the layout survives.
+fn escape_table_cell(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '|' => out.push_str("\\|"),
+            '\n' | '\r' => out.push_str("<br>"),
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 fn write_diff_list(out: &mut String, title: &str, items: &[String]) -> std::fmt::Result {
@@ -388,6 +409,45 @@ mod tests {
     fn pure_function_same_input_same_output() {
         let r = sample();
         assert_eq!(to_markdown(&r), to_markdown(&r));
+    }
+
+    #[test]
+    fn diff_table_escapes_pipes_in_check_names() {
+        use crate::{DiffOptions, Verdict};
+
+        // Curr has a fail; baseline has a pass, with a check name
+        // containing pipes — must be escaped or the markdown table breaks.
+        let mut base = Report::new("c", "0.1.0");
+        base.push(CheckResult::pass("a|b|c").with_duration_ms(100));
+        let mut curr = Report::new("c", "0.1.0");
+        curr.push(CheckResult::fail("a|b|c", Severity::Error).with_duration_ms(220));
+        let diff = curr.diff_with(
+            &base,
+            &DiffOptions {
+                duration_regression_pct: Some(20.0),
+                duration_regression_abs_ms: None,
+            },
+        );
+        assert!(!diff.is_clean());
+        let md = diff.to_markdown();
+
+        // Pipes inside the check name must be backslash-escaped so the
+        // surrounding `|`-delimited table layout survives.
+        assert!(
+            md.contains(r"a\|b\|c"),
+            "check-name pipes not escaped: {}",
+            md
+        );
+        // And the raw form (unescaped pipes) must NOT appear in the table
+        // row, since that would corrupt the column count.
+        assert!(
+            !md.lines().any(|l| l.starts_with("| a|b|c |")),
+            "raw pipe leaked into table row: {}",
+            md
+        );
+        // sanity: this test only matters if the diff actually emits the
+        // expected sections.
+        assert!(matches!(curr.overall_verdict(), Verdict::Fail));
     }
 
     #[test]
