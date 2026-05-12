@@ -40,14 +40,14 @@ Add to `Cargo.toml`:
 
 ```toml
 [dependencies]
-dev-report = "0.9.2"
+dev-report = "0.9.3"
 ```
 
 Opt-in features:
 
 ```toml
 [dependencies]
-dev-report = { version = "0.9.2", features = ["terminal", "markdown"] }
+dev-report = { version = "0.9.3", features = ["terminal", "markdown"] }
 ```
 
 Build a report:

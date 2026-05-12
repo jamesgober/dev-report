@@ -16,9 +16,7 @@
 //! the validator script in `scripts/validate_schema.py` against this output.
 
 use chrono::TimeZone;
-use dev_report::{
-    CheckResult, Evidence, FileRef, MultiReport, Report, Severity,
-};
+use dev_report::{CheckResult, Evidence, FileRef, MultiReport, Report, Severity};
 
 fn build_report(producer: &str) -> Report {
     let frozen_start = chrono::Utc.with_ymd_and_hms(2026, 5, 11, 12, 0, 0).unwrap();
@@ -44,10 +42,7 @@ fn build_report(producer: &str) -> Report {
     // Warn with key-value evidence.
     let mut c3 = CheckResult::warn("env::leaked", Severity::Warning)
         .with_detail("RUST_LOG was set during test")
-        .with_evidence(Evidence::kv(
-            "env",
-            [("CI", "true"), ("RUST_LOG", "debug")],
-        ));
+        .with_evidence(Evidence::kv("env", [("CI", "true"), ("RUST_LOG", "debug")]));
     c3.at = frozen_start;
     r.push(c3);
 
@@ -56,9 +51,17 @@ fn build_report(producer: &str) -> Report {
         .with_detail("expected 42, got 41")
         .with_duration_ms(13)
         .with_tags(["unit", "flaky"])
-        .with_evidence(Evidence::snippet("panic", "assertion `left == right` failed"))
+        .with_evidence(Evidence::snippet(
+            "panic",
+            "assertion `left == right` failed",
+        ))
         .with_evidence(Evidence::file_ref("source", "src/math.rs"))
-        .with_evidence(Evidence::file_ref_lines("call_site", "tests/smoke.rs", 42, 47));
+        .with_evidence(Evidence::file_ref_lines(
+            "call_site",
+            "tests/smoke.rs",
+            42,
+            47,
+        ));
     c4.at = frozen_start;
     r.push(c4);
 
@@ -75,8 +78,7 @@ fn build_report(producer: &str) -> Report {
     r.push(c6);
 
     // Skip with no severity.
-    let mut c7 = CheckResult::skip("integration::network")
-        .with_detail("no network in sandbox");
+    let mut c7 = CheckResult::skip("integration::network").with_detail("no network in sandbox");
     c7.at = frozen_start;
     r.push(c7);
 
@@ -98,7 +100,9 @@ fn build_report(producer: &str) -> Report {
 
 fn build_multi() -> MultiReport {
     let frozen_start = chrono::Utc.with_ymd_and_hms(2026, 5, 11, 12, 0, 0).unwrap();
-    let frozen_end = chrono::Utc.with_ymd_and_hms(2026, 5, 11, 12, 0, 10).unwrap();
+    let frozen_end = chrono::Utc
+        .with_ymd_and_hms(2026, 5, 11, 12, 0, 10)
+        .unwrap();
     let mut m = MultiReport::new("sample-subject", "0.9.3");
     m.started_at = frozen_start;
     m.push(build_report("dev-bench"));
@@ -108,10 +112,14 @@ fn build_multi() -> MultiReport {
 }
 
 fn main() {
-    let arg = std::env::args().nth(1).unwrap_or_else(|| "report".to_string());
+    let arg = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| "report".to_string());
     let json = match arg.as_str() {
         "multi" => build_multi().to_json().expect("serialize MultiReport"),
-        _ => build_report("dev-bench").to_json().expect("serialize Report"),
+        _ => build_report("dev-bench")
+            .to_json()
+            .expect("serialize Report"),
     };
     println!("{}", json);
 }
