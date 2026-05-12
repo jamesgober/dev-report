@@ -1248,7 +1248,9 @@ mod tests {
         // measurement was non-finite.
         let mut r = Report::new("c", "0.1.0");
         r.push(CheckResult::pass("k").with_evidence(Evidence::numeric("ratio", f64::NAN)));
-        let json = r.to_json().expect("non-finite must not break serialization");
+        let json = r
+            .to_json()
+            .expect("non-finite must not break serialization");
         assert!(json.contains("\"ratio\""));
     }
 

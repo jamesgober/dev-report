@@ -239,7 +239,13 @@ fn write_diff(out: &mut String, d: &Diff) -> std::fmt::Result {
         for c in &d.severity_changes {
             let from = c.from.map(severity_word).unwrap_or("none");
             let to = c.to.map(severity_word).unwrap_or("none");
-            writeln!(out, "| {} | {} | {} |", escape_table_cell(&c.name), from, to)?;
+            writeln!(
+                out,
+                "| {} | {} | {} |",
+                escape_table_cell(&c.name),
+                from,
+                to
+            )?;
         }
         writeln!(out)?;
     }
