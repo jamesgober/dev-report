@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.6] - 2026-05-12
+
+Markdown table hardening surfaced by the post-polish audit pass.
+
+### Fixed
+
+- `Diff::to_markdown()` (markdown feature) now backslash-escapes `|` and replaces line breaks with `<br>` inside check-name cells of the *Severity changes* and *Duration regressions* tables. A check named `a|b|c` previously corrupted the surrounding `|`-delimited table layout, shifting every later column. Newlines had the same effect. Both forms are now safe.
+
+### Internal
+
+- New helper `escape_table_cell()` in the markdown module — `|` becomes `\|`, `\n`/`\r` becomes `<br>`.
+- New test `diff_table_escapes_pipes_in_check_names` exercises the regression with a check name containing two pipes.
+
+[0.9.6]: https://github.com/jamesgober/dev-report/releases/tag/v0.9.6
+
 ## [0.9.5] - 2026-05-12
 
 Bug-fix release surfaced by the post-polish audit pass.
