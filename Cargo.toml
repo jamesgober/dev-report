@@ -1,6 +1,6 @@
 [package]
 name = "dev-report"
-version = "0.9.3"
+version = "0.9.4"
 edition = "2021"
 rust-version = "1.85"
 readme = "README.md"
@@ -10,14 +10,14 @@ authors = [
     "James Gober <me@jamesgober.com>"
 ]
 
-description = "Structured, machine-readable reports for AI-assisted Rust development. Foundation schema of the dev-* verification suite."
+description = "Structured JSON reports for Rust verification tooling. Stable, versioned wire format with optional terminal, markdown, SARIF, and JUnit XML rendering. Foundation of the dev-* collection."
 
 keywords = [
     "testing",
-    "verification",
     "reporting",
-    "ci",
-    "ai-tools"
+    "sarif",
+    "junit",
+    "ci"
 ]
 
 categories = [

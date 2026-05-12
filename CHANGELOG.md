@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.4] - 2026-05-12
+
+Documentation and SEO pass. No code changes.
+
+### Changed
+
+- README header standardized to match the collection-wide template: Rust logo image, MSRV badge positioned between CI and docs.rs, copyright block at the bottom.
+- Subtitle now reads `STRUCTURED VERIFICATION REPORTS FOR RUST` (was `STRUCTURED REPORTS FOR AI-ASSISTED RUST DEVELOPMENT`). The crate targets every Rust crate maintainer, not only AI tooling.
+- Tagline rewritten to lead with what the schema *does* (produce / consume / diff) rather than its internal role.
+- `## The dev-* suite` section retitled to `The dev-* collection` and expanded from 6 to 14 sibling crates (the full current suite). Crate links now point at crates.io.
+- `Cargo.toml` `description` rewritten: leads with the actual feature set (JSON, versioned, with SARIF/JUnit/markdown/terminal output) instead of the AI-assisted framing.
+- `Cargo.toml` `keywords` retuned: `testing`, `reporting`, `sarif`, `junit`, `ci` (was `testing`, `verification`, `reporting`, `ci`, `ai-tools`).
+
+### Added
+
+- "Foundation of the `dev-*` verification collection" content block on the README, sized so the suite relationship is visible at a glance without crowding the intro.
+
+[0.9.4]: https://github.com/jamesgober/dev-report/releases/tag/v0.9.4
+
 ## [0.9.3] - 2026-05-12
 
 ### Added
