@@ -34,6 +34,19 @@
 #![warn(missing_docs)]
 #![warn(rust_2018_idioms)]
 
+/// Version of this crate as compiled, taken from its `Cargo.toml`.
+///
+/// Lets tools that bundle this crate, such as the `dev` CLI in
+/// `dev-tools`, report the version that is actually linked. This is the
+/// crate version, not the wire-format version; see [`SCHEMA_VERSION`].
+///
+/// # Example
+///
+/// ```
+/// assert!(!dev_report::VERSION.is_empty());
+/// ```
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};

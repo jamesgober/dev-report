@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.8] - 2026-10-09
+
+Adds a crate-version constant for tools that bundle this crate.
+
+### Added
+
+- `VERSION` constant with the crate version as compiled (taken from
+  `Cargo.toml`). The `dev` CLI in `dev-tools` reads it so `dev version`
+  reports the version that is actually linked. Before, it read
+  versions out of the `Cargo.lock` packaged at publish time, which lags
+  behind whenever a newer patch is resolved on install. This is the
+  crate version, not the wire-format version (`SCHEMA_VERSION`).
+
+### Notes
+
+- No behaviour change. No new dependencies. `schema_version` stays at
+  `1`.
+
+[0.9.8]: https://github.com/jamesgober/dev-report/releases/tag/v0.9.8
+
 ## [0.9.7] - 2026-10-09
 
 Wire-format and exporter fixes, plus the MSRV rollback to Rust 1.75.
