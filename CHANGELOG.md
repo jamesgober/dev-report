@@ -7,24 +7,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.9.7] - 2026-05-18
+## [0.9.7] - 2026-10-09
 
-MSRV rollback to Rust 1.75. Backed off from 1.85 after `dev-fixtures`
-swapped `tempfile` → `mod-tempdir` 1.0 in its own 0.9.5 release,
-eliminating the `getrandom 0.4.2 → edition2024` chain that was the
-sole reason the dev-* collection sat at 1.85. No code changes here;
-this crate's own runtime dependencies have always been
-1.75-compatible.
+Wire-format and exporter fixes, plus the MSRV rollback to Rust 1.75.
+The rollback follows `dev-fixtures` 0.9.5 swapping `tempfile` for
+`mod-tempdir` 1.0, which removed the `getrandom 0.4.2 -> edition2024`
+chain that was the only reason the dev-* collection sat at 1.85. This
+crate's own runtime dependencies have always been 1.75-compatible.
+
+### Added
+
+- `SCHEMA_VERSION` constant: the `schema_version` this build writes
+  (still `1`). `Report::new` and `MultiReport::new` use it.
+
+### Fixed
+
+- Deserializing a `Report` or `MultiReport` (through `from_json` or any
+  serde path, including the reports nested in a `MultiReport`) now
+  checks `schema_version`. A value of `0` or anything newer than
+  `SCHEMA_VERSION` fails with `unsupported schema_version N` instead of
+  being read as if it were version 1. Every document produced by this
+  crate carries `1`, so existing reports are unaffected.
+- A `Diff` with a duration regression against a 0 ms baseline could not
+  be read back. `delta_pct` is infinite in that case, `serde_json`
+  writes it as `null`, and deserializing `null` into `f64` failed. It
+  is now written as `null` on purpose and read back as `f64::INFINITY`.
+- `EvidenceData::Numeric` built directly (bypassing `Evidence::numeric`)
+  with `NaN` or an infinity serialized as `null`, which then failed to
+  parse. The variant now writes non-finite values as `0.0`, matching
+  `Evidence::numeric`, and reads a `null` from older documents as `0.0`.
+- SARIF (`sarif` feature): `artifactLocation.uri` was the raw file path.
+  Windows paths (`C:\src\lib.rs`, `\\server\share\x.rs`) and paths with
+  spaces or non-ASCII characters are not valid URI references, and
+  GitHub code scanning rejects them. Paths are now converted:
+  backslashes become `/`, absolute paths become `file://` URIs, relative
+  paths stay relative, and characters a URI cannot carry are
+  percent-encoded. `region.startLine` is no longer emitted for line `0`
+  (SARIF lines start at 1), and an `endLine` before the `startLine` is
+  dropped.
+- JUnit XML (`junit` feature): U+FFFE and U+FFFF are now stripped along
+  with the C0 control characters. XML 1.0 does not allow them anywhere,
+  so one in a check name or detail made the whole document unparseable.
+- Markdown (`markdown` feature): a snippet containing a ```` ``` ````
+  fence closed the surrounding code block early, and backticks in a
+  producer, tag, key-value key, file path or diff-list name broke the
+  inline code span. Fences and code spans are now sized to their
+  content. Line breaks in a check name no longer split the heading, and
+  multi-line details and key-value values stay inside their list item.
 
 ### Changed
 
 - `rust-version` lowered from `1.85` to `1.75` in `Cargo.toml`.
-- MSRV badge in README updated from `1.85+` to `1.75+`.
+- CI's MSRV job now builds on Rust 1.75. It was still pinned to 1.85,
+  so the advertised MSRV was not being tested.
+- README: MSRV badge and the MSRV section now say 1.75, and both
+  install snippets name the current version.
+
+### Documentation
+
+- `Evidence::numeric_int` no longer claims to preserve precision above
+  2^53. Values up to 2^53 round-trip exactly; larger ones round to the
+  nearest `f64`.
+- Crate-level docs list the current suite instead of the original five
+  crates.
 
 ### Notes
 
-- No code change. No API change. No new dependencies.
-- Library, examples, and tests all build clean on Rust 1.75 (verified).
+- No breaking API changes. No new dependencies.
+- Library, examples, and tests build and pass on Rust 1.75.
 
 [0.9.7]: https://github.com/jamesgober/dev-report/releases/tag/v0.9.7
 

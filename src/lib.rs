@@ -1,10 +1,10 @@
 //! # dev-report
 //!
-//! Structured, machine-readable reports for AI-assisted Rust development.
+//! Structured, machine-readable reports for Rust verification tooling.
 //!
 //! `dev-report` is the foundation schema of the `dev-*` verification suite.
-//! Every other crate in the suite (`dev-bench`, `dev-fixtures`, `dev-async`,
-//! `dev-stress`, `dev-chaos`) emits results that conform to this schema.
+//! Every other crate in the suite (`dev-bench`, `dev-coverage`, `dev-fuzz`,
+//! `dev-security`, and the rest) emits results that conform to this schema.
 //!
 //! ## Why a separate crate
 //!
@@ -60,6 +60,43 @@ pub use diff::{Diff, DiffOptions, DurationRegression, SeverityChange};
 
 mod multi;
 pub use multi::MultiReport;
+
+/// Wire-format version written by this build of `dev-report`.
+///
+/// Every [`Report`] and [`MultiReport`] carries it in `schema_version`.
+/// It stays at `1` for the whole 0.x line. Deserializing a document whose
+/// `schema_version` is `0` or newer than this constant fails with a
+/// descriptive error, so a consumer never silently misreads a format it
+/// does not understand.
+///
+/// # Example
+///
+/// ```
+/// use dev_report::{Report, SCHEMA_VERSION};
+///
+/// let r = Report::new("crate", "0.1.0");
+/// assert_eq!(r.schema_version, SCHEMA_VERSION);
+///
+/// let future = r#"{"schema_version": 99, "subject": "c", "subject_version": "0.1.0",
+///     "producer": null, "started_at": "2026-01-01T00:00:00Z",
+///     "finished_at": null, "checks": []}"#;
+/// assert!(Report::from_json(future).is_err());
+/// ```
+pub const SCHEMA_VERSION: u32 = 1;
+
+/// Reject `schema_version` values this build cannot read.
+pub(crate) fn deserialize_schema_version<'de, D>(deserializer: D) -> Result<u32, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let v = u32::deserialize(deserializer)?;
+    if v == 0 || v > SCHEMA_VERSION {
+        return Err(serde::de::Error::custom(format_args!(
+            "unsupported schema_version {v}; this build of dev-report understands versions 1 through {SCHEMA_VERSION}"
+        )));
+    }
+    Ok(v)
+}
 
 /// Top-level verdict for a check or a whole report.
 ///
@@ -176,7 +213,18 @@ pub enum EvidenceKind {
 #[serde(rename_all = "snake_case")]
 pub enum EvidenceData {
     /// A single floating-point value (e.g. `ops_per_sec`, `mean_ns`).
-    Numeric(f64),
+    ///
+    /// JSON has no representation for `NaN` or infinity. A non-finite
+    /// value is written as `0.0` (the same coercion
+    /// [`Evidence::numeric`] applies), and a `null` read from older
+    /// documents is read back as `0.0`, so a report always round-trips.
+    Numeric(
+        #[serde(
+            serialize_with = "serialize_finite_f64",
+            deserialize_with = "deserialize_finite_f64"
+        )]
+        f64,
+    ),
     /// String-to-string pairs (e.g. environment, configuration).
     ///
     /// Stored as a `BTreeMap` so JSON output is deterministic.
@@ -185,6 +233,20 @@ pub enum EvidenceData {
     Snippet(String),
     /// File reference with optional line range.
     FileRef(FileRef),
+}
+
+fn serialize_finite_f64<S>(value: &f64, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    serializer.serialize_f64(if value.is_finite() { *value } else { 0.0 })
+}
+
+fn deserialize_finite_f64<'de, D>(deserializer: D) -> Result<f64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Option::<f64>::deserialize(deserializer)?.unwrap_or(0.0))
 }
 
 /// A piece of structured evidence backing a [`CheckResult`].
@@ -238,13 +300,13 @@ impl Evidence {
 
     /// Build a numeric-evidence attachment from an integer value.
     ///
-    /// Preserves precision for counters that exceed `f64`'s 53-bit
-    /// integer range (e.g. iteration counts, byte sizes). The value is
-    /// stored as `f64` on the wire (the schema is unchanged), but
-    /// callers don't have to perform a possibly-lossy `as f64` cast.
+    /// A convenience for counters (iteration counts, byte sizes) so
+    /// callers don't have to write the `as f64` cast themselves. The
+    /// value is stored as `f64` on the wire (the schema is unchanged).
     ///
-    /// For values up to `2^53` the round-trip is exact. Above that,
-    /// precision degrades the same way it would for any `f64`.
+    /// Magnitudes up to `2^53` round-trip exactly. Above that the value
+    /// is rounded to the nearest representable `f64`, as with any
+    /// integer-to-float conversion.
     ///
     /// # Example
     ///
@@ -643,7 +705,10 @@ impl CheckResult {
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Report {
-    /// Schema version for this report format.
+    /// Schema version for this report format. Always [`SCHEMA_VERSION`]
+    /// for reports built by this crate; deserialization rejects versions
+    /// this build does not understand.
+    #[serde(deserialize_with = "deserialize_schema_version")]
     pub schema_version: u32,
     /// Crate or project being reported on.
     pub subject: String,
@@ -673,7 +738,7 @@ impl Report {
     /// ```
     pub fn new(subject: impl Into<String>, subject_version: impl Into<String>) -> Self {
         Self {
-            schema_version: 1,
+            schema_version: SCHEMA_VERSION,
             subject: subject.into(),
             subject_version: subject_version.into(),
             producer: None,
@@ -938,6 +1003,9 @@ impl Report {
     }
 
     /// Deserialize a report from JSON.
+    ///
+    /// Fails if the document is malformed or its `schema_version` is not
+    /// one this build understands (see [`SCHEMA_VERSION`]).
     ///
     /// # Example
     ///
@@ -1252,6 +1320,49 @@ mod tests {
             .to_json()
             .expect("non-finite must not break serialization");
         assert!(json.contains("\"ratio\""));
+    }
+
+    #[test]
+    fn numeric_variant_built_directly_with_non_finite_still_round_trips() {
+        // Bypassing `Evidence::numeric` used to write `null`, which then
+        // failed to parse back. The variant now writes 0.0.
+        let mut r = Report::new("c", "0.1.0");
+        r.push(CheckResult::pass("k").with_evidence(Evidence {
+            label: "ratio".into(),
+            data: EvidenceData::Numeric(f64::INFINITY),
+        }));
+        let json = r.to_json().unwrap();
+        assert!(json.contains("\"numeric\": 0.0"), "{json}");
+        let parsed = Report::from_json(&json).unwrap();
+        assert_eq!(
+            parsed.checks[0].evidence[0].data,
+            EvidenceData::Numeric(0.0)
+        );
+    }
+
+    #[test]
+    fn numeric_null_from_older_documents_reads_as_zero() {
+        let e: Evidence =
+            serde_json::from_str(r#"{"label": "x", "data": {"numeric": null}}"#).unwrap();
+        assert_eq!(e.data, EvidenceData::Numeric(0.0));
+    }
+
+    #[test]
+    fn from_json_rejects_unknown_schema_versions() {
+        let json = Report::new("c", "0.1.0").to_json().unwrap();
+        assert!(Report::from_json(&json).is_ok());
+        for bad in [0u32, 2, 99] {
+            let doc = json.replacen(
+                "\"schema_version\": 1",
+                &format!("\"schema_version\": {bad}"),
+                1,
+            );
+            let err = Report::from_json(&doc).unwrap_err().to_string();
+            assert!(
+                err.contains(&format!("unsupported schema_version {bad}")),
+                "{err}"
+            );
+        }
     }
 
     #[test]

@@ -65,7 +65,30 @@ pub struct DurationRegression {
     /// Current duration, in milliseconds.
     pub current_ms: u64,
     /// Percent slower than baseline (e.g. `25.0` for 25% slower).
+    ///
+    /// `f64::INFINITY` when the baseline duration was 0 ms. JSON has no
+    /// infinity, so that value is written as `null` and read back as
+    /// `f64::INFINITY`.
+    #[serde(serialize_with = "serialize_pct", deserialize_with = "deserialize_pct")]
     pub delta_pct: f64,
+}
+
+fn serialize_pct<S>(value: &f64, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    if value.is_finite() {
+        serializer.serialize_f64(*value)
+    } else {
+        serializer.serialize_none()
+    }
+}
+
+fn deserialize_pct<'de, D>(deserializer: D) -> Result<f64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Option::<f64>::deserialize(deserializer)?.unwrap_or(f64::INFINITY))
 }
 
 /// Result of comparing two [`Report`]s.
@@ -495,6 +518,24 @@ mod tests {
         curr.push(CheckResult::fail("a", Severity::Error));
         let d = diff_reports(&curr, &prev, &DiffOptions::default());
         let json = serde_json::to_string(&d).unwrap();
+        let back: Diff = serde_json::from_str(&json).unwrap();
+        assert_eq!(d, back);
+    }
+
+    #[test]
+    fn zero_ms_baseline_regression_round_trips_through_json() {
+        // A 0 ms baseline gives an infinite delta. JSON has no infinity,
+        // so the diff must still serialize and parse back.
+        let mut prev = r("c", "0.1.0");
+        prev.push(CheckResult::pass("a").with_duration_ms(0));
+        let mut curr = r("c", "0.1.0");
+        curr.push(CheckResult::pass("a").with_duration_ms(5));
+        let d = diff_reports(&curr, &prev, &DiffOptions::default());
+        assert_eq!(d.duration_regressions.len(), 1);
+        assert!(d.duration_regressions[0].delta_pct.is_infinite());
+
+        let json = serde_json::to_string(&d).unwrap();
+        assert!(json.contains("\"delta_pct\":null"), "{json}");
         let back: Diff = serde_json::from_str(&json).unwrap();
         assert_eq!(d, back);
     }

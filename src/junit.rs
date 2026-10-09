@@ -184,7 +184,8 @@ fn escape_attr(out: &mut String, s: &str) {
             '\n' => out.push_str("&#10;"),
             '\r' => out.push_str("&#13;"),
             '\t' => out.push_str("&#9;"),
-            c if (c as u32) < 0x20 => {} // strip other control chars
+            // Strip characters XML 1.0 does not allow at all.
+            c if is_xml_illegal(c) => {}
             c => out.push(c),
         }
     }
@@ -196,10 +197,21 @@ fn write_text(out: &mut String, s: &str) {
             '&' => out.push_str("&amp;"),
             '<' => out.push_str("&lt;"),
             '>' => out.push_str("&gt;"),
-            c if (c as u32) < 0x20 && c != '\n' && c != '\r' && c != '\t' => {}
+            c if is_xml_illegal(c) => {}
             c => out.push(c),
         }
     }
+}
+
+/// `true` for characters outside the XML 1.0 `Char` production: C0
+/// control characters other than tab, newline and carriage return, and
+/// the noncharacters U+FFFE and U+FFFF. A parser rejects the whole
+/// document if any of them appears, even escaped.
+fn is_xml_illegal(c: char) -> bool {
+    matches!(
+        c,
+        '\u{0}'..='\u{8}' | '\u{B}' | '\u{C}' | '\u{E}'..='\u{1F}' | '\u{FFFE}' | '\u{FFFF}'
+    )
 }
 
 #[cfg(test)]
@@ -278,6 +290,22 @@ mod tests {
         assert!(xml.contains("message=\"oh no: &lt;bad&gt; &amp; &quot;quotes&quot;\""));
         // Inside the text body, &, <, > are escaped; " is not.
         assert!(xml.contains("oh no: &lt;bad&gt; &amp; \"quotes\"</failure>"));
+    }
+
+    #[test]
+    fn characters_illegal_in_xml_are_stripped() {
+        let mut r = Report::new("c", "0.1.0").with_producer("p");
+        r.push(
+            CheckResult::fail("bad\u{1}name\u{FFFE}", Severity::Error)
+                .with_detail("bell\u{7} nul\u{0} end\u{FFFF}\tok"),
+        );
+        let xml = to_junit_xml(&r);
+        for bad in ['\u{0}', '\u{1}', '\u{7}', '\u{FFFE}', '\u{FFFF}'] {
+            assert!(!xml.contains(bad), "{bad:?} leaked into {xml}");
+        }
+        assert!(xml.contains("name=\"badname\""));
+        assert!(xml.contains("message=\"bell nul end&#9;ok\""));
+        assert!(xml.contains(">bell nul end\tok</failure>"));
     }
 
     #[test]

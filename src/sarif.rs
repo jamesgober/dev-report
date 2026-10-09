@@ -16,7 +16,16 @@
 //!
 //! [`Evidence`] payloads of kind [`EvidenceData::FileRef`] become SARIF
 //! `physicalLocation` entries with `region.startLine` / `region.endLine`
-//! when the [`FileRef`] carries a line range.
+//! when the [`FileRef`] carries a line range. Line numbers below `1` are
+//! not valid SARIF and are left out.
+//!
+//! SARIF requires `artifactLocation.uri` to be a URI reference, so the
+//! file path is converted: backslashes become `/`, absolute paths become
+//! `file://` URIs (`C:\src\lib.rs` becomes `file:///C:/src/lib.rs`,
+//! `\\server\share\x.rs` becomes `file://server/share/x.rs`, `/home/x.rs`
+//! becomes `file:///home/x.rs`), relative paths stay relative, and
+//! characters that are not allowed in a URI (spaces, `%`, non-ASCII) are
+//! percent-encoded.
 //!
 //! For a [`MultiReport`], each constituent [`Report`] becomes a separate
 //! SARIF `run`, so consumers can tell which producer emitted which finding.
@@ -143,18 +152,82 @@ fn level_for(severity: Option<Severity>) -> &'static str {
 
 fn location_for(file_ref: &crate::FileRef) -> Value {
     let mut physical = serde_json::Map::new();
-    physical.insert("artifactLocation".into(), json!({ "uri": file_ref.path }));
-    if file_ref.line_start.is_some() || file_ref.line_end.is_some() {
+    physical.insert(
+        "artifactLocation".into(),
+        json!({ "uri": artifact_uri(&file_ref.path) }),
+    );
+    // SARIF line numbers are 1-based, so 0 is dropped. An `endLine` is
+    // only meaningful next to a `startLine` and must not precede it.
+    if let Some(s) = file_ref.line_start.filter(|&n| n >= 1) {
         let mut region = serde_json::Map::new();
-        if let Some(s) = file_ref.line_start {
-            region.insert("startLine".into(), Value::Number(s.into()));
-        }
-        if let Some(e) = file_ref.line_end {
+        region.insert("startLine".into(), Value::Number(s.into()));
+        if let Some(e) = file_ref.line_end.filter(|&e| e >= s) {
             region.insert("endLine".into(), Value::Number(e.into()));
         }
         physical.insert("region".into(), Value::Object(region));
     }
     json!({ "physicalLocation": Value::Object(physical) })
+}
+
+/// Convert a filesystem path (Windows or Unix, absolute or relative)
+/// into a URI reference that SARIF consumers accept.
+fn artifact_uri(path: &str) -> String {
+    let normalized = path.replace('\\', "/");
+    let bytes = normalized.as_bytes();
+    let is_drive = bytes.len() >= 2
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && (bytes.len() == 2 || bytes[2] == b'/');
+
+    let prefix = if normalized.starts_with("//") {
+        // UNC path: //server/share/x -> file://server/share/x
+        "file:"
+    } else if is_drive {
+        "file:///"
+    } else if normalized.starts_with('/') {
+        "file://"
+    } else {
+        ""
+    };
+
+    let mut out = String::with_capacity(prefix.len() + normalized.len());
+    out.push_str(prefix);
+    for (i, b) in normalized.bytes().enumerate() {
+        // The colon after a drive letter is part of the path. Anywhere
+        // else (notably in the first segment of a relative path, where it
+        // would read as a URI scheme separator) it is encoded.
+        let drive_colon = is_drive && i == 1;
+        let keep = drive_colon
+            || b.is_ascii_alphanumeric()
+            || matches!(
+                b,
+                b'-' | b'.'
+                    | b'_'
+                    | b'~'
+                    | b'/'
+                    | b'!'
+                    | b'$'
+                    | b'&'
+                    | b'\''
+                    | b'('
+                    | b')'
+                    | b'*'
+                    | b'+'
+                    | b','
+                    | b';'
+                    | b'='
+                    | b'@'
+            );
+        if keep {
+            out.push(char::from(b));
+        } else {
+            const HEX: &[u8; 16] = b"0123456789ABCDEF";
+            out.push('%');
+            out.push(char::from(HEX[usize::from(b >> 4)]));
+            out.push(char::from(HEX[usize::from(b & 0x0f)]));
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -223,6 +296,70 @@ mod tests {
         let phys = &v["runs"][0]["results"][0]["locations"][0]["physicalLocation"];
         assert_eq!(phys["artifactLocation"]["uri"], "src/lib.rs");
         assert!(phys.get("region").is_none());
+    }
+
+    fn uri_of(path: &str) -> String {
+        let mut r = Report::new("c", "0.1.0").with_producer("p");
+        r.push(
+            CheckResult::fail("x", Severity::Error).with_evidence(Evidence::file_ref("f", path)),
+        );
+        let v: Value = serde_json::from_str(&to_sarif(&r)).unwrap();
+        v["runs"][0]["results"][0]["locations"][0]["physicalLocation"]["artifactLocation"]["uri"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    }
+
+    #[test]
+    fn relative_paths_stay_relative() {
+        assert_eq!(uri_of("src/lib.rs"), "src/lib.rs");
+        assert_eq!(uri_of("./src/lib.rs"), "./src/lib.rs");
+        assert_eq!(uri_of(r"src\parse\mod.rs"), "src/parse/mod.rs");
+    }
+
+    #[test]
+    fn absolute_paths_become_file_uris() {
+        assert_eq!(uri_of("/home/me/x.rs"), "file:///home/me/x.rs");
+        assert_eq!(
+            uri_of(r"C:\Dev\crate\src\lib.rs"),
+            "file:///C:/Dev/crate/src/lib.rs"
+        );
+        assert_eq!(uri_of("d:/a/b.rs"), "file:///d:/a/b.rs");
+        assert_eq!(uri_of(r"\\server\share\x.rs"), "file://server/share/x.rs");
+    }
+
+    #[test]
+    fn uri_unsafe_characters_are_percent_encoded() {
+        assert_eq!(uri_of("my dir/a%b.rs"), "my%20dir/a%25b.rs");
+        assert_eq!(uri_of("src/caf\u{e9}.rs"), "src/caf%C3%A9.rs");
+        assert_eq!(
+            uri_of(r"C:\Program Files\x.rs"),
+            "file:///C:/Program%20Files/x.rs"
+        );
+        // A colon in a relative path would read as a URI scheme.
+        assert_eq!(uri_of("a:b/c.rs"), "a%3Ab/c.rs");
+        assert_eq!(uri_of(r"C:\a:b.rs"), "file:///C:/a%3Ab.rs");
+    }
+
+    #[test]
+    fn invalid_line_numbers_are_dropped_from_region() {
+        let mut r = Report::new("c", "0.1.0").with_producer("p");
+        r.push(
+            CheckResult::fail("a", Severity::Error)
+                .with_evidence(Evidence::file_ref_lines("f", "x.rs", 0, 0)),
+        );
+        r.push(
+            CheckResult::fail("b", Severity::Error)
+                .with_evidence(Evidence::file_ref_lines("f", "x.rs", 9, 3)),
+        );
+        let v: Value = serde_json::from_str(&to_sarif(&r)).unwrap();
+        let results = v["runs"][0]["results"].as_array().unwrap();
+        assert!(results[0]["locations"][0]["physicalLocation"]
+            .get("region")
+            .is_none());
+        let region = &results[1]["locations"][0]["physicalLocation"]["region"];
+        assert_eq!(region["startLine"], 9);
+        assert!(region.get("endLine").is_none());
     }
 
     #[test]

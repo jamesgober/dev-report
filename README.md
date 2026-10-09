@@ -58,7 +58,7 @@ Opt-in features:
 
 ```toml
 [dependencies]
-dev-report = { version = "0.9.6", features = ["terminal", "markdown"] }
+dev-report = { version = "0.9.7", features = ["terminal", "markdown"] }
 ```
 
 Build a report:
@@ -192,7 +192,8 @@ wire format.
   `Warn` checks are included (SARIF is a defect-report format).
   Severity maps to SARIF `level`: `Critical`/`Error` → `error`,
   `Warning` → `warning`, `Info` → `note`. `Evidence::FileRef` becomes
-  a SARIF `physicalLocation`. No new dependencies.
+  a SARIF `physicalLocation`; Windows and absolute paths are converted
+  to valid `file://` URIs. No new dependencies.
 - `junit` — `to_junit_xml` emits a Jenkins/Surefire JUnit XML
   document. Every check becomes a `<testcase>`; fails get a
   `<failure>` child, skips get a `<skipped/>` child, warns are emitted
@@ -224,6 +225,11 @@ touching Rust. The schema covers all of `Report`, `MultiReport`,
 
 CI validates a generated sample against the schema on every run via
 `scripts/validate_schema.py` and the `schema_sample` example.
+
+`dev_report::SCHEMA_VERSION` is the version this build writes.
+Deserializing a document whose `schema_version` is newer than that
+(or `0`) fails with a clear error instead of silently misreading a
+format the consumer does not understand.
 
 ## The `dev-*` collection
 
@@ -257,9 +263,8 @@ the schema and follow strict semver.
 
 ## Minimum supported Rust version
 
-`1.85` — pinned in `Cargo.toml` via `rust-version` and verified by
-the MSRV job in CI. (Bumped from 1.75 because transitive dependencies
-in the suite require `edition2024`, stabilized in Rust 1.85.)
+`1.75` — pinned in `Cargo.toml` via `rust-version` and verified by
+the MSRV job in CI.
 
 ## License
 

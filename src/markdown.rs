@@ -84,7 +84,7 @@ fn write_report(out: &mut String, r: &Report) -> std::fmt::Result {
     writeln!(out)?;
     writeln!(out, "- **Schema version:** {}", r.schema_version)?;
     if let Some(p) = &r.producer {
-        writeln!(out, "- **Producer:** `{}`", p)?;
+        writeln!(out, "- **Producer:** {}", code_span(p))?;
     }
     writeln!(
         out,
@@ -141,7 +141,7 @@ fn write_check(out: &mut String, c: &CheckResult) -> std::fmt::Result {
     writeln!(
         out,
         "### {} - **{}**{}",
-        c.name,
+        one_line(&c.name),
         verdict_word(c.verdict),
         sev
     )?;
@@ -151,11 +151,11 @@ fn write_check(out: &mut String, c: &CheckResult) -> std::fmt::Result {
     }
     writeln!(out, "- **At:** {}", c.at.format("%Y-%m-%d %H:%M:%S UTC"))?;
     if !c.tags.is_empty() {
-        let tags: Vec<String> = c.tags.iter().map(|t| format!("`{}`", t)).collect();
+        let tags: Vec<String> = c.tags.iter().map(|t| code_span(t)).collect();
         writeln!(out, "- **Tags:** {}", tags.join(", "))?;
     }
     if let Some(detail) = &c.detail {
-        writeln!(out, "- **Detail:** {}", detail)?;
+        writeln!(out, "- **Detail:** {}", indent_continuation(detail, "  "))?;
     }
     if !c.evidence.is_empty() {
         writeln!(out)?;
@@ -172,21 +172,34 @@ fn write_evidence(out: &mut String, label: &str, data: &EvidenceData) -> std::fm
     match data {
         EvidenceData::Numeric(n) => writeln!(out, "- **{}** (numeric): `{}`", label, n),
         EvidenceData::Snippet(s) => {
+            // The fence must be longer than any backtick run inside the
+            // snippet, or a snippet containing ``` would close it early.
+            let fence = "`".repeat((longest_backtick_run(s) + 1).max(3));
             writeln!(out, "- **{}** (snippet):", label)?;
             writeln!(out)?;
-            writeln!(out, "  ```")?;
+            writeln!(out, "  {}", fence)?;
             for line in s.lines() {
                 writeln!(out, "  {}", line)?;
             }
-            writeln!(out, "  ```")
+            writeln!(out, "  {}", fence)
         }
         EvidenceData::FileRef(f) => {
-            writeln!(out, "- **{}** (file): `{}`", label, file_ref_inline(f))
+            writeln!(
+                out,
+                "- **{}** (file): {}",
+                label,
+                code_span(&file_ref_inline(f))
+            )
         }
         EvidenceData::KeyValue(map) => {
             writeln!(out, "- **{}** (key-value):", label)?;
             for (k, v) in map {
-                writeln!(out, "  - `{}`: {}", k, v)?;
+                writeln!(
+                    out,
+                    "  - {}: {}",
+                    code_span(k),
+                    indent_continuation(v, "    ")
+                )?;
             }
             Ok(())
         }
@@ -287,6 +300,46 @@ fn escape_table_cell(s: &str) -> String {
     out
 }
 
+/// Collapse line breaks to spaces for contexts that must stay on one
+/// line (headings, code spans).
+fn one_line(s: &str) -> String {
+    s.replace("\r\n", " ").replace(['\n', '\r'], " ")
+}
+
+/// Indent every line after the first so multi-line text stays inside
+/// the surrounding list item.
+fn indent_continuation(s: &str, indent: &str) -> String {
+    let normalized = s.replace("\r\n", "\n").replace('\r', "\n");
+    normalized.replace('\n', &format!("\n{}", indent))
+}
+
+fn longest_backtick_run(s: &str) -> usize {
+    let (mut longest, mut current) = (0, 0);
+    for ch in s.chars() {
+        if ch == '`' {
+            current += 1;
+            longest = longest.max(current);
+        } else {
+            current = 0;
+        }
+    }
+    longest
+}
+
+/// Wrap `s` in an inline code span that survives backticks and line
+/// breaks in the value. CommonMark: the delimiter is a backtick run
+/// longer than any run inside, padded with spaces when the content
+/// starts or ends with a backtick.
+fn code_span(s: &str) -> String {
+    let body = one_line(s);
+    let ticks = "`".repeat(longest_backtick_run(&body) + 1);
+    if body.starts_with('`') || body.ends_with('`') {
+        format!("{ticks} {body} {ticks}")
+    } else {
+        format!("{ticks}{body}{ticks}")
+    }
+}
+
 fn write_diff_list(out: &mut String, title: &str, items: &[String]) -> std::fmt::Result {
     if items.is_empty() {
         return Ok(());
@@ -294,7 +347,7 @@ fn write_diff_list(out: &mut String, title: &str, items: &[String]) -> std::fmt:
     writeln!(out, "## {}", title)?;
     writeln!(out)?;
     for name in items {
-        writeln!(out, "- `{}`", name)?;
+        writeln!(out, "- {}", code_span(name))?;
     }
     writeln!(out)
 }
@@ -454,6 +507,40 @@ mod tests {
         // sanity: this test only matters if the diff actually emits the
         // expected sections.
         assert!(matches!(curr.overall_verdict(), Verdict::Fail));
+    }
+
+    #[test]
+    fn backticks_and_line_breaks_cannot_break_the_layout() {
+        let mut r = Report::new("c", "0.1.0").with_producer("dev`x");
+        r.push(
+            CheckResult::fail("multi\nline", Severity::Error)
+                .with_tag("a`b")
+                .with_detail("first\nsecond")
+                .with_evidence(Evidence::snippet("md", "before\n```\nafter"))
+                .with_evidence(Evidence::kv("env", [("K`", "v1\nv2")]))
+                .with_evidence(Evidence::file_ref("f", "dir/`odd`.rs")),
+        );
+        let md = to_markdown(&r);
+        assert!(md.contains("- **Producer:** ``dev`x``"), "{md}");
+        assert!(md.contains("### multi line - **FAIL** (error)"), "{md}");
+        assert!(md.contains("- **Tags:** ``a`b``"), "{md}");
+        assert!(md.contains("- **Detail:** first\n  second\n"), "{md}");
+        // Snippet fence is longer than the ``` inside it.
+        assert!(
+            md.contains("  ````\n  before\n  ```\n  after\n  ````\n"),
+            "{md}"
+        );
+        assert!(md.contains("  - `` K` ``: v1\n    v2\n"), "{md}");
+        assert!(md.contains("(file): ``dir/`odd`.rs``"), "{md}");
+    }
+
+    #[test]
+    fn diff_list_names_with_backticks_are_code_spans() {
+        let prev = Report::new("c", "0.1.0");
+        let mut curr = Report::new("c", "0.1.0");
+        curr.push(CheckResult::fail("a`b", Severity::Error));
+        let md = diff_to_markdown(&curr.diff(&prev));
+        assert!(md.contains("- ``a`b``"), "{md}");
     }
 
     #[test]

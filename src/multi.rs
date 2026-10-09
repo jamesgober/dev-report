@@ -37,7 +37,9 @@ use crate::{CheckResult, Report, Verdict};
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MultiReport {
-    /// Schema version. Tracks the same number as [`Report::schema_version`].
+    /// Schema version. Tracks the same number as [`Report::schema_version`];
+    /// deserialization rejects versions this build does not understand.
+    #[serde(deserialize_with = "crate::deserialize_schema_version")]
     pub schema_version: u32,
     /// Crate or project being reported on.
     pub subject: String,
@@ -56,7 +58,7 @@ impl MultiReport {
     /// Begin a new aggregate for the given subject and version.
     pub fn new(subject: impl Into<String>, subject_version: impl Into<String>) -> Self {
         Self {
-            schema_version: 1,
+            schema_version: crate::SCHEMA_VERSION,
             subject: subject.into(),
             subject_version: subject_version.into(),
             started_at: Utc::now(),
@@ -231,6 +233,10 @@ impl MultiReport {
     }
 
     /// Deserialize a multi-report from JSON.
+    ///
+    /// Fails if the document is malformed or any `schema_version` in it
+    /// (top level or constituent report) is not one this build
+    /// understands (see [`SCHEMA_VERSION`](crate::SCHEMA_VERSION)).
     pub fn from_json(s: &str) -> serde_json::Result<Self> {
         serde_json::from_str(s)
     }
@@ -432,6 +438,32 @@ mod tests {
         assert_eq!(parsed.subject, "c");
         assert_eq!(parsed.reports.len(), 1);
         assert_eq!(parsed.overall_verdict(), Verdict::Fail);
+    }
+
+    #[test]
+    fn from_json_rejects_unknown_schema_versions() {
+        let mut m = MultiReport::new("c", "0.1.0");
+        m.push(rep("p1", vec![CheckResult::pass("x")]));
+        let json = m.to_json().unwrap();
+
+        // Top-level version from the future.
+        let top = json.replacen("\"schema_version\": 1", "\"schema_version\": 2", 1);
+        let err = MultiReport::from_json(&top).unwrap_err().to_string();
+        assert!(err.contains("unsupported schema_version 2"), "{err}");
+
+        // Constituent report carrying a version from the future.
+        let pos = json.rfind("\"schema_version\": 1").unwrap();
+        let mut inner = json.clone();
+        inner.replace_range(pos.., &json[pos..].replacen("1", "7", 1));
+        let err = MultiReport::from_json(&inner).unwrap_err().to_string();
+        assert!(err.contains("unsupported schema_version 7"), "{err}");
+
+        // Version 0 never existed.
+        let zero = json.replacen("\"schema_version\": 1", "\"schema_version\": 0", 1);
+        assert!(MultiReport::from_json(&zero).is_err());
+
+        // The current version still parses.
+        assert!(MultiReport::from_json(&json).is_ok());
     }
 
     #[test]
