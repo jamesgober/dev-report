@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.9] - 2026-11-12
+
+Fixes for report diffing and the terminal and JUnit renderers.
+
+### Added
+
+- `Report::duplicate_names()` lists check names that appear more than
+  once in a report.
+
+### Fixed
+
+- `Report::diff` compared only the first check of each name, so a new
+  failure was missed when an older check already used the same name
+  (two fuzz crashes under one name, for example). Checks are now
+  grouped by name and counted by verdict: more failing checks under a
+  name than in the baseline puts it in `newly_failing`, and a name that
+  appears more or fewer times shows up in `added` or `removed`. Reports
+  with unique names diff exactly as before.
+- The terminal renderer wrote report text as is, so a check name,
+  detail or evidence label carrying escape sequences could recolour,
+  retitle or clear the terminal, even in the monochrome output. Control
+  characters other than newline and tab are now written as `\u{..}`.
+- The JUnit renderer summed check durations with plain addition, which
+  panicked in debug builds (and wrapped in release builds) for very
+  large `duration_ms` values read from a report file. The sum now
+  saturates.
+
+### Notes
+
+- No new dependencies. `schema_version` stays at `1`.
+
+[0.9.9]: https://github.com/jamesgober/dev-report/releases/tag/v0.9.9
+
 ## [0.9.8] - 2026-10-09
 
 Adds a crate-version constant for tools that bundle this crate.

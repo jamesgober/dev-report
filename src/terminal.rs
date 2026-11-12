@@ -100,6 +100,28 @@ pub fn multi_to_terminal_color(multi: &MultiReport) -> String {
     render_multi(multi, true)
 }
 
+/// Writes report text with control characters escaped.
+///
+/// Report text can come from tool output or from a report file someone
+/// else produced. Terminal escape sequences in it (ESC, BEL, the C1
+/// range) could recolour, retitle or clear the terminal, so every
+/// control character except newline and tab is written as `\u{..}`.
+struct Clean<'a>(&'a str);
+
+impl std::fmt::Display for Clean<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use std::fmt::Write as _;
+        for ch in self.0.chars() {
+            if ch.is_control() && ch != '\n' && ch != '\t' {
+                write!(f, "\\u{{{:x}}}", ch as u32)?;
+            } else {
+                f.write_char(ch)?;
+            }
+        }
+        Ok(())
+    }
+}
+
 fn render(report: &Report, color: bool) -> String {
     let mut out = String::with_capacity(256);
     let _ = write_header(&mut out, report, color);
@@ -117,10 +139,13 @@ fn write_header(out: &mut String, report: &Report, color: bool) -> std::fmt::Res
     writeln!(
         out,
         "{}=== dev-report :: {} {} ==={}",
-        bold, report.subject, report.subject_version, reset
+        bold,
+        Clean(&report.subject),
+        Clean(&report.subject_version),
+        reset
     )?;
     if let Some(p) = &report.producer {
-        writeln!(out, "producer: {}", p)?;
+        writeln!(out, "producer: {}", Clean(p))?;
     }
     writeln!(out, "schema:   v{}", report.schema_version)?;
     Ok(())
@@ -175,13 +200,13 @@ fn write_check(out: &mut String, c: &CheckResult, color: bool) -> std::fmt::Resu
         .duration_ms
         .map(|ms| format!("  {dim}{ms}ms{reset}"))
         .unwrap_or_default();
-    writeln!(out, "{} {}{}", badge, c.name, dur)?;
+    writeln!(out, "{} {}{}", badge, Clean(&c.name), dur)?;
 
     if !c.tags.is_empty() {
-        writeln!(out, "   tags: {}", c.tags.join(", "))?;
+        writeln!(out, "   tags: {}", Clean(&c.tags.join(", ")))?;
     }
     if let Some(detail) = &c.detail {
-        writeln!(out, "   detail: {}", detail)?;
+        writeln!(out, "   detail: {}", Clean(detail))?;
     }
     if !c.evidence.is_empty() {
         writeln!(out, "   evidence:")?;
@@ -195,17 +220,27 @@ fn write_check(out: &mut String, c: &CheckResult, color: bool) -> std::fmt::Resu
 fn write_evidence(out: &mut String, label: &str, data: &EvidenceData) -> std::fmt::Result {
     match data {
         EvidenceData::Numeric(n) => {
-            writeln!(out, "     - {}: {}", label, n)
+            writeln!(out, "     - {}: {}", Clean(label), n)
         }
         EvidenceData::Snippet(s) => {
-            writeln!(out, "     - {}: {:?}", label, s)
+            writeln!(out, "     - {}: {:?}", Clean(label), s)
         }
         EvidenceData::FileRef(f) => {
-            writeln!(out, "     - {}: {}", label, file_ref_inline(f))
+            writeln!(
+                out,
+                "     - {}: {}",
+                Clean(label),
+                Clean(&file_ref_inline(f))
+            )
         }
         EvidenceData::KeyValue(map) => {
             let pairs: Vec<String> = map.iter().map(|(k, v)| format!("{}: {}", k, v)).collect();
-            writeln!(out, "     - {}: {{ {} }}", label, pairs.join(", "))
+            writeln!(
+                out,
+                "     - {}: {{ {} }}",
+                Clean(label),
+                Clean(&pairs.join(", "))
+            )
         }
     }
 }
@@ -289,7 +324,7 @@ fn render_diff(diff: &Diff, color: bool) -> String {
         for c in &diff.severity_changes {
             let from = c.from.map(severity_word).unwrap_or("none");
             let to = c.to.map(severity_word).unwrap_or("none");
-            let _ = writeln!(out, "  - {} : {} -> {}", c.name, from, to);
+            let _ = writeln!(out, "  - {} : {} -> {}", Clean(&c.name), from, to);
         }
     }
     if !diff.duration_regressions.is_empty() {
@@ -298,7 +333,10 @@ fn render_diff(diff: &Diff, color: bool) -> String {
             let _ = writeln!(
                 out,
                 "  - {} : {}ms -> {}ms ({:+.2}%)",
-                r.name, r.baseline_ms, r.current_ms, r.delta_pct
+                Clean(&r.name),
+                r.baseline_ms,
+                r.current_ms,
+                r.delta_pct
             );
         }
     }
@@ -317,7 +355,7 @@ fn write_diff_section(
     }
     let _ = writeln!(out, "{}{}{}:", color_open, label, color_close);
     for name in items {
-        let _ = writeln!(out, "  - {}", name);
+        let _ = writeln!(out, "  - {}", Clean(name));
     }
 }
 
@@ -339,7 +377,10 @@ fn render_multi(multi: &MultiReport, color: bool) -> String {
     let _ = writeln!(
         out,
         "{}=== MultiReport :: {} {} ==={}",
-        bold, multi.subject, multi.subject_version, reset
+        bold,
+        Clean(&multi.subject),
+        Clean(&multi.subject_version),
+        reset
     );
     let _ = writeln!(
         out,
@@ -357,7 +398,7 @@ fn render_multi(multi: &MultiReport, color: bool) -> String {
             out,
             "{}--- {} ---{}",
             bold,
-            r.producer.as_deref().unwrap_or("(unknown producer)"),
+            Clean(r.producer.as_deref().unwrap_or("(unknown producer)")),
             reset
         );
         out.push_str(&render(r, color));
@@ -402,6 +443,31 @@ mod tests {
         assert!(out.contains("[WARN warning]"));
         assert!(out.contains("[FAIL critical]"));
         assert!(out.contains("[SKIP]"));
+    }
+
+    #[test]
+    fn control_characters_in_report_text_are_escaped() {
+        let mut r = Report::new("victim\x1b[2J", "0.1.0").with_producer("p\x07");
+        r.push(
+            CheckResult::fail("esc\x1b]0;owned\x07\x1b[2J", Severity::Error)
+                .with_tag("t\u{9b}")
+                .with_detail("line one\nline two\x1b[31m")
+                .with_evidence(Evidence::numeric("n\x1b", 1.0)),
+        );
+        for out in [to_terminal(&r), to_terminal_color(&r)] {
+            let stripped = out
+                .replace("\x1b[0m", "")
+                .replace("\x1b[1m", "")
+                .replace("\x1b[2m", "")
+                .replace("\x1b[31m", "");
+            assert!(!stripped.contains('\x1b'), "{out:?}");
+            assert!(!out.contains('\x07'), "{out:?}");
+            assert!(!out.contains('\u{9b}'), "{out:?}");
+        }
+        let mono = to_terminal(&r);
+        assert!(!mono.contains('\x1b'));
+        assert!(mono.contains("esc\\u{1b}]0;owned\\u{7}"), "{mono}");
+        assert!(mono.contains("line one\nline two"));
     }
 
     #[test]

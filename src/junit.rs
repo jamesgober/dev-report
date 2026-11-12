@@ -111,7 +111,11 @@ fn write_testsuite(out: &mut String, report: &Report) {
     let producer = report.producer.as_deref().unwrap_or("unknown");
     let (pass, fail, warn, skip) = report.verdict_counts();
     let total = pass + fail + warn + skip;
-    let total_ms: u64 = report.checks.iter().filter_map(|c| c.duration_ms).sum();
+    let total_ms: u64 = report
+        .checks
+        .iter()
+        .filter_map(|c| c.duration_ms)
+        .fold(0u64, u64::saturating_add);
 
     out.push_str("  <testsuite");
     write_attr(out, "name", producer);
@@ -316,6 +320,15 @@ mod tests {
         let xml = to_junit_xml(&r);
         assert!(xml.contains("time=\"1.500\""));
         assert!(xml.contains("time=\"0.007\""));
+    }
+
+    #[test]
+    fn huge_durations_do_not_overflow_the_suite_total() {
+        let mut r = Report::new("c", "0.1.0").with_producer("p");
+        r.push(CheckResult::pass("a").with_duration_ms(u64::MAX));
+        r.push(CheckResult::pass("b").with_duration_ms(2));
+        let xml = to_junit_xml(&r);
+        assert!(xml.contains(&format!("time=\"{}\"", format_seconds(u64::MAX))));
     }
 
     #[test]

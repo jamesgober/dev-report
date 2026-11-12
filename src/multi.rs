@@ -454,7 +454,7 @@ mod tests {
         // Constituent report carrying a version from the future.
         let pos = json.rfind("\"schema_version\": 1").unwrap();
         let mut inner = json.clone();
-        inner.replace_range(pos.., &json[pos..].replacen("1", "7", 1));
+        inner.replace_range(pos.., &json[pos..].replacen('1', "7", 1));
         let err = MultiReport::from_json(&inner).unwrap_err().to_string();
         assert!(err.contains("unsupported schema_version 7"), "{err}");
 
