@@ -96,6 +96,12 @@ where
 /// All vectors are sorted alphabetically by check name so two diffs of
 /// the same input pair produce equal `Diff` values.
 ///
+/// Check names should be unique within a report (see
+/// [`Report::duplicate_names`]). When a name does appear more than once,
+/// the diff compares how many checks each report has under that name
+/// with each verdict, so a new failure is still reported when an older
+/// check already uses the same name.
+///
 /// # Example
 ///
 /// ```
@@ -117,18 +123,28 @@ where
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Diff {
     /// Checks that are `Fail` in current but were not `Fail` in baseline
-    /// (or did not exist in baseline).
+    /// (or did not exist in baseline). A name that appears more than once
+    /// is listed when current has more failing checks under it than
+    /// baseline.
     pub newly_failing: Vec<String>,
     /// Checks that are `Pass` in current but were not `Pass` in baseline.
+    /// A name that appears more than once is listed when current has
+    /// more passing checks under it than baseline.
     pub newly_passing: Vec<String>,
-    /// Severity transitions for checks present in both reports.
+    /// Severity transitions for checks present in both reports. For a
+    /// name that appears more than once, the most severe check of each
+    /// report is compared.
     pub severity_changes: Vec<SeverityChange>,
     /// Duration regressions for checks present in both reports, where
-    /// the slowdown exceeds the configured threshold.
+    /// the slowdown exceeds the configured threshold. For a name that
+    /// appears more than once, the longest duration of each report is
+    /// compared.
     pub duration_regressions: Vec<DurationRegression>,
-    /// Checks present in current but not in baseline.
+    /// Checks present in current but not in baseline, and names that
+    /// appear more times in current than in baseline.
     pub added: Vec<String>,
-    /// Checks present in baseline but not in current.
+    /// Checks present in baseline but not in current, and names that
+    /// appear more times in baseline than in current.
     pub removed: Vec<String>,
 }
 
@@ -250,9 +266,13 @@ impl Diff {
 }
 
 pub(crate) fn diff_reports(current: &Report, baseline: &Report, opts: &DiffOptions) -> Diff {
-    // First-occurrence-wins indexing on check name.
-    let curr_idx: BTreeMap<&str, &CheckResult> = index_first(&current.checks);
-    let base_idx: BTreeMap<&str, &CheckResult> = index_first(&baseline.checks);
+    // Group every check under its name. Check names are meant to be
+    // unique within a report, but producers can emit the same name more
+    // than once. Comparing only the first check of each name would hide
+    // a new failure behind an older check with the same name, so each
+    // name is compared by how many checks it has with each verdict.
+    let curr_idx = group_by_name(&current.checks);
+    let base_idx = group_by_name(&baseline.checks);
 
     let mut newly_failing = Vec::new();
     let mut newly_passing = Vec::new();
@@ -263,41 +283,37 @@ pub(crate) fn diff_reports(current: &Report, baseline: &Report, opts: &DiffOptio
 
     // Walk current to find: newly failing, newly passing, severity
     // changes, duration regressions, added.
-    for (name, c) in &curr_idx {
-        match base_idx.get(name) {
-            None => {
-                added.push((*name).to_string());
-                if c.verdict == Verdict::Fail {
-                    newly_failing.push((*name).to_string());
-                }
-                if c.verdict == Verdict::Pass {
-                    newly_passing.push((*name).to_string());
-                }
-            }
-            Some(b) => {
-                if c.verdict == Verdict::Fail && b.verdict != Verdict::Fail {
-                    newly_failing.push((*name).to_string());
-                }
-                if c.verdict == Verdict::Pass && b.verdict != Verdict::Pass {
-                    newly_passing.push((*name).to_string());
-                }
-                if c.severity != b.severity {
-                    severity_changes.push(SeverityChange {
-                        name: (*name).to_string(),
-                        from: b.severity,
-                        to: c.severity,
-                    });
-                }
-                if let Some(reg) = duration_regression(name, b, c, opts) {
-                    duration_regressions.push(reg);
-                }
-            }
+    for (name, curr) in &curr_idx {
+        let base: &[&CheckResult] = base_idx.get(name).map(Vec::as_slice).unwrap_or(&[]);
+        if count_verdict(curr, Verdict::Fail) > count_verdict(base, Verdict::Fail) {
+            newly_failing.push((*name).to_string());
+        }
+        if count_verdict(curr, Verdict::Pass) > count_verdict(base, Verdict::Pass) {
+            newly_passing.push((*name).to_string());
+        }
+        if curr.len() > base.len() {
+            added.push((*name).to_string());
+        }
+        if base.is_empty() {
+            continue;
+        }
+        let (from, to) = (worst_severity(base), worst_severity(curr));
+        if from != to {
+            severity_changes.push(SeverityChange {
+                name: (*name).to_string(),
+                from,
+                to,
+            });
+        }
+        if let Some(reg) = duration_regression(name, base, curr, opts) {
+            duration_regressions.push(reg);
         }
     }
 
     // Walk baseline to find removed.
-    for name in base_idx.keys() {
-        if !curr_idx.contains_key(name) {
+    for (name, base) in &base_idx {
+        let curr_len = curr_idx.get(name).map_or(0, Vec::len);
+        if base.len() > curr_len {
             removed.push((*name).to_string());
         }
     }
@@ -313,22 +329,48 @@ pub(crate) fn diff_reports(current: &Report, baseline: &Report, opts: &DiffOptio
     }
 }
 
-fn index_first(checks: &[CheckResult]) -> BTreeMap<&str, &CheckResult> {
-    let mut map = BTreeMap::new();
+fn group_by_name(checks: &[CheckResult]) -> BTreeMap<&str, Vec<&CheckResult>> {
+    let mut map: BTreeMap<&str, Vec<&CheckResult>> = BTreeMap::new();
     for c in checks {
-        map.entry(c.name.as_str()).or_insert(c);
+        map.entry(c.name.as_str()).or_default().push(c);
     }
     map
 }
 
+fn count_verdict(checks: &[&CheckResult], verdict: Verdict) -> usize {
+    checks.iter().filter(|c| c.verdict == verdict).count()
+}
+
+pub(crate) fn severity_rank(s: Option<Severity>) -> u8 {
+    match s {
+        None => 0,
+        Some(Severity::Info) => 1,
+        Some(Severity::Warning) => 2,
+        Some(Severity::Error) => 3,
+        Some(Severity::Critical) => 4,
+    }
+}
+
+fn worst_severity(checks: &[&CheckResult]) -> Option<Severity> {
+    checks
+        .iter()
+        .map(|c| c.severity)
+        .max_by_key(|s| severity_rank(*s))
+        .flatten()
+}
+
+fn longest_duration(checks: &[&CheckResult]) -> Option<u64> {
+    checks.iter().filter_map(|c| c.duration_ms).max()
+}
+
 fn duration_regression(
     name: &str,
-    baseline: &CheckResult,
-    current: &CheckResult,
+    baseline: &[&CheckResult],
+    current: &[&CheckResult],
     opts: &DiffOptions,
 ) -> Option<DurationRegression> {
-    let base = baseline.duration_ms?;
-    let curr = current.duration_ms?;
+    let base = longest_duration(baseline)?;
+    let curr = longest_duration(current)?;
     if curr <= base {
         return None;
     }
@@ -579,5 +621,54 @@ mod tests {
         let s = diff_reports(&curr, &prev, &DiffOptions::default()).summary();
         assert!(s.contains("1 severity change"));
         assert!(!s.contains("changes"));
+    }
+
+    #[test]
+    fn new_failure_under_an_existing_name_is_reported() {
+        let mut prev = r("c", "0.1.0");
+        prev.push(CheckResult::pass("t"));
+        let mut curr = r("c", "0.1.0");
+        curr.push(CheckResult::pass("t"));
+        curr.push(CheckResult::fail("t", Severity::Critical));
+        let d = diff_reports(&curr, &prev, &DiffOptions::default());
+        assert!(!d.is_clean());
+        assert_eq!(d.newly_failing, vec!["t".to_string()]);
+        assert_eq!(d.added, vec!["t".to_string()]);
+        assert_eq!(d.severity_changes.len(), 1);
+        assert_eq!(d.severity_changes[0].to, Some(Severity::Critical));
+    }
+
+    #[test]
+    fn second_failure_under_a_failing_name_is_reported() {
+        let name = "fuzz::parse::crash";
+        let mut prev = r("c", "0.1.0");
+        prev.push(CheckResult::fail(name, Severity::Critical).with_detail("known"));
+        let mut curr = r("c", "0.1.0");
+        curr.push(CheckResult::fail(name, Severity::Critical).with_detail("known"));
+        curr.push(CheckResult::fail(name, Severity::Critical).with_detail("heap overflow"));
+        let d = diff_reports(&curr, &prev, &DiffOptions::default());
+        assert!(!d.is_clean());
+        assert_eq!(d.newly_failing, vec![name.to_string()]);
+    }
+
+    #[test]
+    fn fewer_duplicates_show_as_removed() {
+        let mut prev = r("c", "0.1.0");
+        prev.push(CheckResult::fail("t", Severity::Error));
+        prev.push(CheckResult::fail("t", Severity::Error));
+        let mut curr = r("c", "0.1.0");
+        curr.push(CheckResult::fail("t", Severity::Error));
+        let d = diff_reports(&curr, &prev, &DiffOptions::default());
+        assert!(d.newly_failing.is_empty());
+        assert_eq!(d.removed, vec!["t".to_string()]);
+    }
+
+    #[test]
+    fn identical_duplicates_are_clean() {
+        let mut a = r("c", "0.1.0");
+        a.push(CheckResult::fail("t", Severity::Error));
+        a.push(CheckResult::pass("t"));
+        let b = a.clone();
+        assert!(diff_reports(&a, &b, &DiffOptions::default()).is_clean());
     }
 }

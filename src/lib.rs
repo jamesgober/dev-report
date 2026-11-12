@@ -1000,6 +1000,37 @@ impl Report {
         self.checks.iter().filter(move |c| c.has_tag(tag))
     }
 
+    /// Check names that appear more than once in this report, sorted
+    /// and listed once each.
+    ///
+    /// Check names should be unique within a report. [`Report::diff`]
+    /// still handles duplicates, but a producer that reuses a name makes
+    /// its checks harder to tell apart.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use dev_report::{CheckResult, Report, Severity};
+    ///
+    /// let mut r = Report::new("crate", "0.1.0");
+    /// r.push(CheckResult::pass("a"));
+    /// r.push(CheckResult::fail("b", Severity::Error));
+    /// r.push(CheckResult::fail("b", Severity::Error));
+    ///
+    /// assert_eq!(r.duplicate_names(), vec!["b".to_string()]);
+    /// ```
+    pub fn duplicate_names(&self) -> Vec<String> {
+        let mut counts: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+        for c in &self.checks {
+            *counts.entry(c.name.as_str()).or_insert(0) += 1;
+        }
+        counts
+            .into_iter()
+            .filter(|(_, n)| *n > 1)
+            .map(|(name, _)| name.to_string())
+            .collect()
+    }
+
     /// Serialize this report to JSON.
     ///
     /// # Example

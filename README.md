@@ -51,14 +51,14 @@ Add to `Cargo.toml`:
 
 ```toml
 [dependencies]
-dev-report = "0.9.8"
+dev-report = "0.9.9"
 ```
 
 Opt-in features:
 
 ```toml
 [dependencies]
-dev-report = { version = "0.9.8", features = ["terminal", "markdown"] }
+dev-report = { version = "0.9.9", features = ["terminal", "markdown"] }
 ```
 
 Build a report:
@@ -153,6 +153,11 @@ assert!(!diff.is_clean());
 `Diff` exposes `newly_failing`, `newly_passing`, `severity_changes`,
 `duration_regressions`, `added`, `removed`. All vectors are sorted by
 check name so two diffs of the same input pair are byte-equal.
+
+Check names should be unique within a report. `Report::duplicate_names`
+lists any that are not. When a name does repeat, the diff counts the
+checks under it by verdict, so a new failure still shows up in
+`newly_failing` even if an older check already has that name.
 
 ## Aggregating multiple producers
 
